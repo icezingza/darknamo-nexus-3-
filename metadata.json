@@ -1,7 +1,7 @@
 
 {
   "name": "DarkNaMo Nexus",
-  "description": "A hyper-realistic, mature, and psychologically complex AI roleplay environment powered by the DarkNaMo Protocol and Gemini 3 Pro.",
+  "description": "A Dharma-guided companion with ethical grounding, memory context, and token-aware streaming responses.",
   "requestFramePermissions": [
     "microphone"
   ]

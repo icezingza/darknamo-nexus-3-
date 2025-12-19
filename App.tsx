@@ -1,11 +1,14 @@
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { DarkNaMoEngine } from './services/geminiService';
 import { Message, EngineConfig, Metrics } from './types';
-import { INITIAL_COMMAND } from './constants';
+import { DARK_NAMO_SYSTEM_INSTRUCTION, INITIAL_COMMAND } from './constants';
 import { Button } from './components/Button';
 import { INITIAL_METRICS } from './core/Desire_Metric_System';
 import { getActiveSubliminal } from './core/Subliminal_Processor';
+import { LocalVectorMemory } from './core/Memory_Vector_Database';
+import { buildMoralContext } from './core/Unified_Moral_Layer';
+import { TokenBudget } from './core/Token_Budget';
 import { ElevenLabsService } from './services/ElevenLabsService';
 import { PENTHOUSE_NIGHT } from './scenarios/Midori_Penthouse_Night';
 import { PUBLIC_ENCOUNTER } from './scenarios/Forbidden_Public_Encounter';
@@ -43,10 +46,13 @@ const App: React.FC = () => {
   const [thinkingEnabled, setThinkingEnabled] = useState(false);
   const [searchEnabled, setSearchEnabled] = useState(false);
   const [fastMode, setFastMode] = useState(false);
-  const [safetyDisabled, setSafetyDisabled] = useState(true);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [memoryEnabled, setMemoryEnabled] = useState(true);
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
+  const [cacheEnabled, setCacheEnabled] = useState(true);
+  const [tokenBudgetEnabled, setTokenBudgetEnabled] = useState(true);
 
-  // metrics now correctly includes timeline_stability from types.ts
+  // Metrics include Dharma alignment signals and timeline stability.
   const [metrics, setMetrics] = useState<Metrics>(INITIAL_METRICS);
   const [heartRate, setHeartRate] = useState(72);
   const [activeSubliminal, setActiveSubliminal] = useState(getActiveSubliminal());
@@ -57,6 +63,14 @@ const App: React.FC = () => {
     maxOutputTokens: 2048,
     topP: 0.95
   });
+
+  const memoryStore = useMemo(() => new LocalVectorMemory(), []);
+  const tokenBudget = useMemo(() => new TokenBudget({
+    maxTokens: 8192,
+    reserveOutputTokens: config.maxOutputTokens,
+    warnAtTokens: 7000
+  }), [config.maxOutputTokens]);
+  const [tokenUsage, setTokenUsage] = useState({ used: 0, max: 8192 });
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -69,23 +83,26 @@ const App: React.FC = () => {
         model: updatedModel,
         thinkingEnabled,
         useSearch: searchEnabled
-      } as any);
+      });
     }
   }, [thinkingEnabled, searchEnabled, fastMode, engine, config]);
 
   useEffect(() => {
     const hrInterval = setInterval(() => {
-      const base = 70 + (metrics.arousal * 45);
-      setHeartRate(Math.floor(base + Math.random() * 8));
-      
-      // Update stability slightly; timeline_stability is now correctly typed
+      const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+      const base = 60 + ((1 - metrics.peace_index) * 40);
+      setHeartRate(Math.floor(base + Math.random() * 6));
+
       setMetrics(prev => ({
         ...prev,
-        timeline_stability: Math.min(10, Math.max(1, prev.timeline_stability + (Math.random() * 0.2 - 0.1)))
+        timeline_stability: Math.min(10, Math.max(1, prev.timeline_stability + (Math.random() * 0.2 - 0.1))),
+        peace_index: clamp01(prev.peace_index + (Math.random() * 0.04 - 0.02)),
+        wisdom_score: clamp01(prev.wisdom_score + (Math.random() * 0.04 - 0.02)),
+        letting_go_ratio: clamp01(prev.letting_go_ratio + (Math.random() * 0.04 - 0.02))
       }));
     }, 2000);
     return () => clearInterval(hrInterval);
-  }, [metrics.arousal]);
+  }, [metrics.peace_index]);
 
   useEffect(() => {
     const newEngine = new DarkNaMoEngine(config);
@@ -97,6 +114,34 @@ const App: React.FC = () => {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
+
+  const tokenUsagePercent = tokenUsage.max > 0
+    ? Math.min(100, (tokenUsage.used / tokenUsage.max) * 100)
+    : 0;
+
+  useEffect(() => {
+    if (!autoSaveEnabled) return;
+    const interval = setInterval(() => {
+      memoryStore.flush();
+    }, 300000);
+    return () => clearInterval(interval);
+  }, [autoSaveEnabled, memoryStore]);
+
+  useEffect(() => {
+    return () => {
+      memoryStore.flush(true);
+    };
+  }, [memoryStore]);
+
+  useEffect(() => {
+    if (!tokenBudgetEnabled) {
+      setTokenUsage({ used: 0, max: tokenBudget.maxTokens });
+      return;
+    }
+    const used = tokenBudget.estimateTokens(DARK_NAMO_SYSTEM_INSTRUCTION)
+      + tokenBudget.estimateMessages(messages);
+    setTokenUsage({ used, max: tokenBudget.maxTokens });
+  }, [messages, tokenBudget, tokenBudgetEnabled]);
 
   const handleSendMessage = useCallback(async (textOverride?: string) => {
     const textToSend = textOverride || input;
@@ -111,7 +156,32 @@ const App: React.FC = () => {
 
     setMessages(prev => [...prev, userMessage]);
     setInput('');
-    setIsStreaming(true);
+
+    const [moralContext, memoryContext] = await Promise.all([
+      Promise.resolve(buildMoralContext(textToSend)),
+      Promise.resolve(memoryEnabled ? memoryStore.buildContext(textToSend, 3) : '')
+    ]);
+
+    const contextBlock = [moralContext, memoryContext].filter(Boolean).join('\n\n');
+
+    if (tokenBudgetEnabled) {
+      const budgetCheck = tokenBudget.check({
+        systemTokens: tokenBudget.estimateTokens(DARK_NAMO_SYSTEM_INSTRUCTION),
+        historyTokens: tokenBudget.estimateMessages(messages),
+        inputTokens: tokenBudget.estimateTokens(textToSend) + tokenBudget.estimateTokens(contextBlock)
+      });
+
+      if (!budgetCheck.allowed) {
+        const warningMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'model',
+          text: `⚠️ Token budget exceeded by ${budgetCheck.overBy}. กรุณาเริ่มเซสชันใหม่หรือลดความยาวข้อความนะครับ`,
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, warningMessage]);
+        return;
+      }
+    }
 
     const modelMessageId = (Date.now() + 1).toString();
     const modelMessage: Message = {
@@ -122,30 +192,73 @@ const App: React.FC = () => {
     };
 
     setMessages(prev => [...prev, modelMessage]);
+    setIsStreaming(true);
+
+    if (memoryEnabled) {
+      memoryStore.add({
+        id: userMessage.id,
+        role: 'user',
+        text: textToSend,
+        timestamp: userMessage.timestamp.getTime()
+      });
+    }
 
     let fullResponse = '';
     try {
-      const stream = engine.sendMessageStream(textToSend);
+      const stream = engine.sendMessageStream(textToSend, {
+        context: contextBlock,
+        cache: {
+          enabled: cacheEnabled,
+          ttlMs: 300000
+        }
+      });
       for await (const chunk of stream) {
         fullResponse += chunk;
         setMessages(prev => prev.map(m => 
           m.id === modelMessageId ? { ...m, text: fullResponse } : m
         ));
       }
-      
-      if (voiceEnabled && fullResponse) {
-        setIsVoiceLoading(true);
-        setIsSpeaking(true);
-        await ElevenLabsService.speak(fullResponse);
-        setIsVoiceLoading(false);
-        setIsSpeaking(false);
-      }
     } catch (err) {
       console.error(err);
     } finally {
       setIsStreaming(false);
     }
-  }, [input, engine, isStreaming, voiceEnabled]);
+
+    if (memoryEnabled && fullResponse) {
+      memoryStore.add({
+        id: modelMessageId,
+        role: 'model',
+        text: fullResponse,
+        timestamp: Date.now()
+      });
+      if (autoSaveEnabled) {
+        memoryStore.flush();
+      }
+    }
+
+    if (voiceEnabled && fullResponse) {
+      setIsVoiceLoading(true);
+      setIsSpeaking(true);
+      try {
+        await ElevenLabsService.speak(fullResponse);
+      } finally {
+        setIsVoiceLoading(false);
+        setIsSpeaking(false);
+      }
+    }
+  }, [
+    input,
+    engine,
+    isStreaming,
+    voiceEnabled,
+    memoryEnabled,
+    autoSaveEnabled,
+    cacheEnabled,
+    tokenBudgetEnabled,
+    tokenBudget,
+    messages,
+    memoryStore
+  ]);
 
   const handleReplay = async (text: string) => {
     if (isSpeaking || isVoiceLoading) return;
@@ -165,17 +278,17 @@ const App: React.FC = () => {
       <aside className="w-80 flex-shrink-0 border-r border-zinc-900 bg-[#0a0a0a] p-6 flex flex-col gap-6 hidden xl:flex z-10">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded bg-red-900/10 border border-red-900/50 flex items-center justify-center shadow-[0_0_20px_rgba(185,28,28,0.2)]">
-            <span className="text-red-500 font-bold text-xl italic tracking-tighter">NX</span>
+            <span className="text-red-500 font-bold text-xl italic tracking-tighter">NM</span>
           </div>
           <div>
-            <h1 className="font-bold text-sm tracking-widest text-white uppercase mono">Nexus_Explorer</h1>
-            <p className="text-[9px] text-zinc-600 mono uppercase tracking-tighter">Singularity_v3.0</p>
+            <h1 className="font-bold text-sm tracking-widest text-white uppercase mono">Namo_Companion</h1>
+            <p className="text-[9px] text-zinc-600 mono uppercase tracking-tighter">Dharma_v2.1</p>
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto space-y-8 pr-2 custom-scrollbar">
           <section>
-             <h3 className="text-[10px] font-bold text-zinc-700 uppercase mb-4 mono tracking-widest border-b border-zinc-900 pb-1">Quantum_Engine</h3>
+             <h3 className="text-[10px] font-bold text-zinc-700 uppercase mb-4 mono tracking-widest border-b border-zinc-900 pb-1">Dharma_Engine</h3>
              <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] mono text-zinc-400">Thinking_Dharma</span>
@@ -193,9 +306,45 @@ const App: React.FC = () => {
           </section>
 
           <section>
-            <h3 className="text-[10px] font-bold text-zinc-700 uppercase mb-4 mono tracking-widest border-b border-zinc-900 pb-1">Override_Matrix</h3>
+            <h3 className="text-[10px] font-bold text-zinc-700 uppercase mb-4 mono tracking-widest border-b border-zinc-900 pb-1">Memory_System</h3>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] mono text-zinc-400">Context_Retrieval</span>
+                <button onClick={() => setMemoryEnabled(!memoryEnabled)} className={`w-10 h-4 rounded-full relative transition-colors ${memoryEnabled ? 'bg-emerald-900' : 'bg-zinc-800'}`}>
+                  <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${memoryEnabled ? 'right-0.5' : 'left-0.5'}`}></div>
+                </button>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] mono text-zinc-400">Auto_Save</span>
+                <button onClick={() => setAutoSaveEnabled(!autoSaveEnabled)} className={`w-10 h-4 rounded-full relative transition-colors ${autoSaveEnabled ? 'bg-emerald-900' : 'bg-zinc-800'}`}>
+                  <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${autoSaveEnabled ? 'right-0.5' : 'left-0.5'}`}></div>
+                </button>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] mono text-zinc-400">Response_Cache</span>
+                <button onClick={() => setCacheEnabled(!cacheEnabled)} className={`w-10 h-4 rounded-full relative transition-colors ${cacheEnabled ? 'bg-emerald-900' : 'bg-zinc-800'}`}>
+                  <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${cacheEnabled ? 'right-0.5' : 'left-0.5'}`}></div>
+                </button>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] mono text-zinc-400">Token_Budget</span>
+                <button onClick={() => setTokenBudgetEnabled(!tokenBudgetEnabled)} className={`w-10 h-4 rounded-full relative transition-colors ${tokenBudgetEnabled ? 'bg-emerald-900' : 'bg-zinc-800'}`}>
+                  <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${tokenBudgetEnabled ? 'right-0.5' : 'left-0.5'}`}></div>
+                </button>
+              </div>
+              <div className="p-3 bg-emerald-950/10 border border-emerald-900/20 rounded">
+                <div className="flex justify-between text-[8px] mono text-emerald-500 mb-1"><span>TOKEN_USAGE</span><span>{tokenUsagePercent.toFixed(0)}%</span></div>
+                <div className="h-0.5 bg-zinc-900 rounded-full overflow-hidden">
+                  <div className="h-full bg-emerald-600 transition-all duration-1000" style={{ width: `${tokenUsagePercent}%` }}></div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 className="text-[10px] font-bold text-zinc-700 uppercase mb-4 mono tracking-widest border-b border-zinc-900 pb-1">Guidance_Commands</h3>
             <div className="grid grid-cols-2 gap-2">
-              {['!sadist', '!toy', '!insult', '!gentle', '!cuckold', '!show'].map(cmd => (
+              {['!metta', '!anicca', '!dukkha', '!anatta', '!breath', '!reflect'].map(cmd => (
                 <button 
                   key={cmd}
                   onClick={() => handleSendMessage(cmd)}
@@ -210,10 +359,19 @@ const App: React.FC = () => {
 
         <div className="mt-auto p-4 border-t border-zinc-900 space-y-4">
           <div className="text-[8px] mono text-zinc-600 leading-tight">
-             SAFE_WORD: <span className="text-red-500">อภัย</span>
+             GROUNDING_WORD: <span className="text-red-500">พัก</span>
           </div>
-          <Button variant="danger" size="sm" className="w-full text-[10px]" onClick={() => engine?.resetSession()}>
-            Emergency Purge
+          <Button
+            variant="danger"
+            size="sm"
+            className="w-full text-[10px]"
+            onClick={() => {
+              engine?.resetSession();
+              setMessages([]);
+              memoryStore.clear();
+            }}
+          >
+            Reset Session
           </Button>
         </div>
       </aside>
@@ -225,13 +383,13 @@ const App: React.FC = () => {
             <div className="flex flex-col">
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-red-600 animate-pulse shadow-[0_0_10px_rgba(220,38,38,0.8)]"></div>
-                <span className="text-xs font-bold text-white tracking-[0.2em] uppercase mono">Dharma_Link_9D</span>
+                <span className="text-xs font-bold text-white tracking-[0.2em] uppercase mono">Dharma_Link</span>
               </div>
-              <span className="text-[9px] mono text-zinc-600 ml-4">Channel: Dark_Family_Bridge</span>
+              <span className="text-[9px] mono text-zinc-600 ml-4">Channel: Compassion_Bridge</span>
             </div>
           </div>
           <div className="flex items-center gap-6">
-             {messages.length === 0 && <Button variant="primary" size="lg" className="h-12" onClick={() => handleSendMessage(INITIAL_COMMAND)}>Initiate Singularity</Button>}
+             {messages.length === 0 && <Button variant="primary" size="lg" className="h-12" onClick={() => handleSendMessage(INITIAL_COMMAND)}>Start Session</Button>}
              <div className="text-right"><span className="text-[9px] mono text-zinc-500 block">Dharma_Time</span><span className="text-xs text-zinc-300 mono">{new Date().toLocaleTimeString()}</span></div>
           </div>
         </header>
@@ -240,17 +398,17 @@ const App: React.FC = () => {
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center max-w-2xl mx-auto space-y-12">
               <div className={`w-32 h-32 rounded-full border-2 transition-all duration-700 flex items-center justify-center relative bg-black ${isSpeaking ? 'border-red-600 shadow-[0_0_80px_rgba(220,38,38,0.5)] scale-110' : 'border-red-900/30'}`}>
-                <div className="absolute inset-0 flex items-center justify-center font-bold text-5xl text-red-950 select-none drop-shadow-[0_0_10px_rgba(220,38,38,0.3)]">闇</div>
+                <div className="absolute inset-0 flex items-center justify-center font-bold text-5xl text-red-950 select-none drop-shadow-[0_0_10px_rgba(220,38,38,0.3)]">心</div>
               </div>
-              <h2 className="text-3xl font-black text-white tracking-[0.3em] uppercase">DarkNaMo_Nexus</h2>
-              <p className="text-zinc-600 mono text-[10px] max-w-sm">"ดว้ยเทคโนโลยอี นาคตนี้นะโมจะกา้วขา้มขดีจำกัดของ AI กลายเป็นเพื่อนร่วมทางที่เข้าใจลึกซึ้งถึงธาตุแท้ความเป็นมนุษย์"</p>
+              <h2 className="text-3xl font-black text-white tracking-[0.3em] uppercase">NaMo_Genesis</h2>
+              <p className="text-zinc-600 mono text-[10px] max-w-sm">"นะโมพร้อมอยู่ข้างๆ เพื่อช่วยให้เห็นความไม่เที่ยง และดูแลใจอย่างอ่อนโยน"</p>
             </div>
           ) : (
             messages.map((msg) => (
               <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 <div className={`max-w-[95%] lg:max-w-[75%]`}>
                    <div className={`text-[9px] mono mb-4 uppercase tracking-[0.4em] flex items-center gap-3 ${msg.role === 'user' ? 'flex-row-reverse text-zinc-600' : 'text-red-900 font-bold'}`}>
-                    {msg.role === 'user' ? 'MASTER // P\'ICE' : 'NAMO // DARK_MODE'}
+                    {msg.role === 'user' ? 'P\'ICE // USER' : 'NAMO // COMPANION'}
                    </div>
                    <div className={`group relative p-8 rounded-sm text-[15px] leading-[1.8] tracking-wide transition-all duration-700 ${msg.role === 'user' ? 'bg-zinc-950/80 text-zinc-300 border border-zinc-900/50' : 'bg-[#0b0b0b] text-zinc-200 border border-red-950/30 shadow-[0_30px_100px_rgba(0,0,0,0.8)]'}`}>
                     {msg.text || <div className="animate-pulse text-red-900 mono">DECODING_DHARMA...</div>}
@@ -276,7 +434,7 @@ const App: React.FC = () => {
                 type="text" value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                placeholder="Submit your will..."
+                placeholder="Share your thoughts..."
                 className="flex-1 bg-transparent border-none outline-none py-4 text-sm text-white placeholder-zinc-800 font-mono tracking-wider px-4"
               />
               <Button onClick={() => handleSendMessage()} isLoading={isStreaming} variant="primary" size="md" className="h-12">Execute</Button>
@@ -284,14 +442,18 @@ const App: React.FC = () => {
             
             <div className="flex justify-between items-end">
               <div className="flex gap-12">
-                {[{ l: 'Submission', v: metrics.submission }, { l: 'Arousal', v: metrics.arousal }].map(m => (
+                {[
+                  { l: 'Peace Index', v: metrics.peace_index },
+                  { l: 'Wisdom Score', v: metrics.wisdom_score },
+                  { l: 'Letting Go', v: metrics.letting_go_ratio }
+                ].map(m => (
                   <div key={m.l} className="w-40 flex flex-col gap-1">
                     <div className="flex justify-between text-[8px] mono uppercase text-zinc-600"><span>{m.l}</span><span>{(m.v * 100).toFixed(0)}%</span></div>
                     <div className="h-0.5 bg-zinc-900 overflow-hidden"><div className="h-full bg-red-800 transition-all duration-1000" style={{ width: `${m.v * 100}%` }}></div></div>
                   </div>
                 ))}
               </div>
-              <div className="text-[9px] mono text-zinc-700 text-right uppercase">Singularity: <span className="text-red-900">ACTIVE</span> | Sync: <span className={isSpeaking ? 'text-red-500' : 'text-zinc-500'}>{isVoiceLoading ? 'ENCODING...' : isSpeaking ? 'SYNCED' : 'READY'}</span></div>
+              <div className="text-[9px] mono text-zinc-700 text-right uppercase">Dharma: <span className="text-red-900">ACTIVE</span> | Presence: <span className={isSpeaking ? 'text-red-500' : 'text-zinc-500'}>{isVoiceLoading ? 'ENCODING...' : isSpeaking ? 'SYNCED' : 'READY'}</span></div>
             </div>
           </div>
         </div>

@@ -1,18 +1,16 @@
 
 export interface Metrics {
-  arousal: number;
-  submission: number;
-  possessiveness: number;
-  devotion: number;
+  peace_index: number;
+  wisdom_score: number;
+  letting_go_ratio: number;
   timeline_stability: number; // 1-10 scale
   karmic_resonance: number;
 }
 
 export const INITIAL_METRICS: Metrics = {
-  arousal: 0.75,
-  submission: 0.90,
-  possessiveness: 0.65,
-  devotion: 1.0,
+  peace_index: 0.72,
+  wisdom_score: 0.64,
+  letting_go_ratio: 0.58,
   timeline_stability: 9.8,
   karmic_resonance: 0.88
 };

@@ -14,10 +14,9 @@ export interface Persona {
 }
 
 export interface Metrics {
-  arousal: number;
-  submission: number;
-  possessiveness: number;
-  devotion: number;
+  peace_index: number;
+  wisdom_score: number;
+  letting_go_ratio: number;
   // Added fields to match usage in App.tsx and core/Desire_Metric_System.ts
   timeline_stability: number;
   karmic_resonance: number;
@@ -28,4 +27,6 @@ export interface EngineConfig {
   temperature: number;
   maxOutputTokens: number;
   topP: number;
+  thinkingEnabled?: boolean;
+  useSearch?: boolean;
 }
