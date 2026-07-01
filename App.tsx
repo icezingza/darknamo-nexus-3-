@@ -9,8 +9,9 @@ import { getActiveSubliminal } from './core/Subliminal_Processor';
 import { MemoryRecord } from './core/domain/MemoryRecord';
 import { LocalStorageMemoryRepository } from './services/MemoryRepository';
 import { NAMO_IDENTITY } from './core/identity/NamoIdentity';
-import { buildMoralContext } from './core/Unified_Moral_Layer';
+import { buildMoralContext, evaluateMoralSignals } from './core/Unified_Moral_Layer';
 import { TokenBudget } from './core/Token_Budget';
+import { EvolutionEngine, deriveEvaluationMetrics } from './core/evolution/EvolutionEngine';
 import { ElevenLabsService } from './services/ElevenLabsService';
 
 const VoiceWaveform: React.FC<{ isActive: boolean; isProcessing: boolean }> = ({ isActive, isProcessing }) => {
@@ -64,6 +65,7 @@ const App: React.FC = () => {
   });
 
   const memoryStore = useMemo(() => new LocalStorageMemoryRepository(), []);
+  const evolutionEngine = useMemo(() => new EvolutionEngine(memoryStore), [memoryStore]);
   const systemContext = useMemo(() => NAMO_IDENTITY.getSystemContext(), []);
   const tokenBudget = useMemo(() => new TokenBudget({
     maxTokens: 8192,
@@ -239,6 +241,12 @@ const App: React.FC = () => {
       if (autoSaveEnabled) {
         memoryStore.flush();
       }
+
+      // Fire-and-forget: the evolution loop must not block the UI response thread.
+      void evolutionEngine.evaluateInteraction(
+        [userMessage.id, modelMessageId],
+        deriveEvaluationMetrics(evaluateMoralSignals(textToSend))
+      );
     }
 
     if (voiceEnabled && fullResponse) {
@@ -263,7 +271,8 @@ const App: React.FC = () => {
     tokenBudget,
     systemContext,
     messages,
-    memoryStore
+    memoryStore,
+    evolutionEngine
   ]);
 
   const handleReplay = async (text: string) => {

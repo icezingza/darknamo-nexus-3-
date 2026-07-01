@@ -13,6 +13,7 @@ export interface MemoryRepository {
   searchArchivedMemories(query: string, limit?: number): MemoryRecord[];
   archive(id: string): void;
   forget(id: string): void;
+  adjustEmotionWeight(id: string, delta: number): void;
   buildContext(query: string, limit?: number): string;
   buildActiveContext(limit?: number): string;
   flush(force?: boolean): void;
@@ -67,6 +68,13 @@ export class LocalStorageMemoryRepository implements MemoryRepository {
     const record = this.records.find(existing => existing.id === id);
     if (!record) return;
     record.forget();
+    this.dirty = true;
+  }
+
+  adjustEmotionWeight(id: string, delta: number) {
+    const record = this.records.find(existing => existing.id === id);
+    if (!record) return;
+    record.adjustEmotionWeight(delta);
     this.dirty = true;
   }
 

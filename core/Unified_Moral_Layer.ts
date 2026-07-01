@@ -1,4 +1,9 @@
-type MoralTone = 'gentle' | 'grounded' | 'encouraging' | 'neutral';
+export type MoralTone = 'gentle' | 'grounded' | 'encouraging' | 'neutral';
+
+export interface MoralSignals {
+  tone: MoralTone;
+  hasRisk: boolean;
+}
 
 const NEGATIVE_SIGNALS = ['sad', 'tired', 'stressed', 'hopeless', 'cry', 'fear', 'anxious'];
 const POSITIVE_SIGNALS = ['thank', 'grateful', 'happy', 'relief', 'proud', 'calm'];
@@ -11,10 +16,15 @@ const detectTone = (input: string): MoralTone => {
   return 'grounded';
 };
 
-export const buildMoralContext = (input: string): string => {
+export const evaluateMoralSignals = (input: string): MoralSignals => {
   const tone = detectTone(input);
   const lowered = input.toLowerCase();
   const hasRisk = RISK_SIGNALS.some(signal => lowered.includes(signal));
+  return { tone, hasRisk };
+};
+
+export const buildMoralContext = (input: string): string => {
+  const { tone, hasRisk } = evaluateMoralSignals(input);
 
   const lines = [
     `Tone: ${tone}`,
