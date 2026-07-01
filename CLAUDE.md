@@ -12,9 +12,9 @@ live pipeline without a separate, explicit decision from the project owner).
 ## 1. Emotion
 
 - Live signal today comes from `core/Unified_Moral_Layer.ts`
-  (`buildMoralContext`) and `core/Subliminal_Processor.ts`.
-  `core/Emotional_Engine.ts` exists but is not imported anywhere — treat it
-  as a draft, not a dependency.
+  (`buildMoralContext`). `core/Subliminal_Processor.ts` is imported in
+  `App.tsx` but is currently unused in the live pipeline, and
+  `core/Emotional_Engine.ts` exists only as an unimported draft.
 - Model emotion as a plain numeric affect vector (e.g. valence, arousal,
   trust, dominance), computed as a pure function of conversation signals.
   No LLM call, no DOM/network access — this must be unit-testable in
