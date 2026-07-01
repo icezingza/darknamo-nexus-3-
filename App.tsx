@@ -2,12 +2,13 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { DarkNaMoEngine } from './services/geminiService';
 import { Message, EngineConfig, Metrics } from './types';
-import { DARK_NAMO_SYSTEM_INSTRUCTION, INITIAL_COMMAND } from './constants';
+import { INITIAL_COMMAND } from './constants';
 import { Button } from './components/Button';
 import { INITIAL_METRICS } from './core/Desire_Metric_System';
 import { getActiveSubliminal } from './core/Subliminal_Processor';
 import { MemoryRecord } from './core/domain/MemoryRecord';
 import { LocalStorageMemoryRepository } from './services/MemoryRepository';
+import { NAMO_IDENTITY } from './core/identity/NamoIdentity';
 import { buildMoralContext } from './core/Unified_Moral_Layer';
 import { TokenBudget } from './core/Token_Budget';
 import { ElevenLabsService } from './services/ElevenLabsService';
@@ -63,6 +64,7 @@ const App: React.FC = () => {
   });
 
   const memoryStore = useMemo(() => new LocalStorageMemoryRepository(), []);
+  const systemContext = useMemo(() => NAMO_IDENTITY.getSystemContext(), []);
   const tokenBudget = useMemo(() => new TokenBudget({
     maxTokens: 8192,
     reserveOutputTokens: config.maxOutputTokens,
@@ -103,7 +105,11 @@ const App: React.FC = () => {
   }, [metrics.peace_index]);
 
   useEffect(() => {
-    const newEngine = new DarkNaMoEngine(config);
+    const newEngine = new DarkNaMoEngine({
+      ...config,
+      thinkingEnabled: false,
+      useSearch: false
+    }, systemContext);
     setEngine(newEngine);
   }, []);
 
@@ -136,10 +142,10 @@ const App: React.FC = () => {
       setTokenUsage({ used: 0, max: tokenBudget.maxTokens });
       return;
     }
-    const used = tokenBudget.estimateTokens(DARK_NAMO_SYSTEM_INSTRUCTION)
+    const used = tokenBudget.estimateTokens(systemContext)
       + tokenBudget.estimateMessages(messages);
     setTokenUsage({ used, max: tokenBudget.maxTokens });
-  }, [messages, tokenBudget, tokenBudgetEnabled]);
+  }, [messages, systemContext, tokenBudget, tokenBudgetEnabled]);
 
   const handleSendMessage = useCallback(async (textOverride?: string) => {
     const textToSend = textOverride || input;
@@ -157,14 +163,15 @@ const App: React.FC = () => {
 
     const [moralContext, memoryContext] = await Promise.all([
       Promise.resolve(buildMoralContext(textToSend)),
-      Promise.resolve(memoryEnabled ? memoryStore.buildContext(textToSend, 3) : '')
+      Promise.resolve(memoryEnabled ? memoryStore.buildActiveContext(3) : '')
     ]);
 
-    const contextBlock = [moralContext, memoryContext].filter(Boolean).join('\n\n');
+    const distilledIdentity = NAMO_IDENTITY.getDistilledContext(moralContext);
+    const contextBlock = [distilledIdentity, memoryContext].filter(Boolean).join('\n\n');
 
     if (tokenBudgetEnabled) {
       const budgetCheck = tokenBudget.check({
-        systemTokens: tokenBudget.estimateTokens(DARK_NAMO_SYSTEM_INSTRUCTION),
+        systemTokens: tokenBudget.estimateTokens(systemContext),
         historyTokens: tokenBudget.estimateMessages(messages),
         inputTokens: tokenBudget.estimateTokens(textToSend) + tokenBudget.estimateTokens(contextBlock)
       });
@@ -254,6 +261,7 @@ const App: React.FC = () => {
     cacheEnabled,
     tokenBudgetEnabled,
     tokenBudget,
+    systemContext,
     messages,
     memoryStore
   ]);

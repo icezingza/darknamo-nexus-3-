@@ -1,6 +1,5 @@
 
 import { GoogleGenAI, GenerateContentResponse, Chat, Modality } from "@google/genai";
-import { DARK_NAMO_SYSTEM_INSTRUCTION } from "../constants";
 import { EngineConfig } from "../types";
 
 type CacheOptions = {
@@ -17,10 +16,12 @@ export class DarkNaMoEngine {
   private ai: GoogleGenAI;
   private chat: Chat | null = null;
   private config: EngineConfig;
+  private systemContext: string;
   private responseCache = new Map<string, { value: string; expiresAt: number }>();
 
-  constructor(config: EngineConfig) {
+  constructor(config: EngineConfig, systemContext: string) {
     this.config = config;
+    this.systemContext = systemContext;
     // Always use the process.env.API_KEY directly in a named object parameter.
     this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     this.initChat();
@@ -35,7 +36,7 @@ export class DarkNaMoEngine {
     const generationConfig: any = {
       temperature: this.config.temperature,
       topP: this.config.topP,
-      systemInstruction: DARK_NAMO_SYSTEM_INSTRUCTION,
+      systemInstruction: this.systemContext,
     };
 
     // Apply Thinking Mode if enabled
@@ -115,7 +116,7 @@ export class DarkNaMoEngine {
       config: {
         // responseModalities must contain exactly one modality: AUDIO.
         responseModalities: [Modality.AUDIO],
-        systemInstruction: DARK_NAMO_SYSTEM_INSTRUCTION,
+        systemInstruction: this.systemContext,
         speechConfig: {
           voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } }
         }
