@@ -166,7 +166,8 @@ const App: React.FC = () => {
       Promise.resolve(memoryEnabled ? memoryStore.buildActiveContext(3) : '')
     ]);
 
-    const contextBlock = [moralContext, memoryContext].filter(Boolean).join('\n\n');
+    const distilledIdentity = NAMO_IDENTITY.getDistilledContext(moralContext);
+    const contextBlock = [distilledIdentity, memoryContext].filter(Boolean).join('\n\n');
 
     if (tokenBudgetEnabled) {
       const budgetCheck = tokenBudget.check({

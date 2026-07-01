@@ -61,26 +61,34 @@ not reintroduce safety-bypass or persona-override modules of that kind.
 ## 4. Identity
 
 - Live implementation: `core/identity/IdentityCapsule.ts` (`IdentityCapsule`)
-  — a model-agnostic persona container with four plain string-array fields
-  (`purpose`, `cognitiveStyle`, `emotionalPosture`, `ethicalConstraints`)
-  and a `getSystemContext()` formatter that renders them into one compact
-  prompt chunk. `core/identity/NamoIdentity.ts` holds the concrete NaMo
-  persona data (restructured, content-equivalent, from the old
-  `constants.ts` monolithic prompt string, which has been removed).
-- `getSystemContext()` output is passed once into `DarkNaMoEngine`'s
-  constructor (`services/geminiService.ts`) as `systemContext`, set as the
-  Gemini `systemInstruction` at session creation — this is the "Load the
-  Identity" step of the pipeline, done once per session rather than
-  resent per turn, to keep token usage bounded per rule 3.
+  — a model-agnostic persona container built from an `IIdentityBlueprint`
+  (four plain string-array fields: `purpose`, `cognitiveStyle`,
+  `emotionalPosture`, `ethicalConstraints`). `core/identity/NamoIdentity.ts`
+  holds the concrete NaMo persona data (restructured, content-equivalent,
+  from the old `constants.ts` monolithic prompt string, which has been
+  removed).
+- Two output formatters, two different cadences:
+  - `getSystemContext()` — full bullet-list rendering, passed once into
+    `DarkNaMoEngine`'s constructor (`services/geminiService.ts`) as
+    `systemContext`, set as the Gemini `systemInstruction` at session
+    creation. This is the "Load the Identity" step, done once per session
+    rather than resent per turn, to keep token usage bounded per rule 3.
+  - `getDistilledContext(currentEmotion)` — a single-line, label-free
+    compression of the same four fields plus the current per-turn
+    emotion/Dharma read (`buildMoralContext`'s output). Called every turn
+    in `App.tsx` and folded into the per-message context block alongside
+    active memories, so the model gets a lightweight persona+mood
+    reminder without repeating the full `getSystemContext()` block.
 - Do not hardcode a new monolithic prompt string anywhere in `App.tsx` or
-  `services/*`; persona changes go through `IdentityCapsule` fields.
+  `services/*`; persona changes go through `IdentityCapsule`/`IIdentityBlueprint`
+  fields.
 - `IdentityCapsule` must stay pure data + string formatting — no LLM call,
   no DOM/network/storage access, so it stays unit-testable in isolation.
 
 ## 5. Cross-cutting rules for these subsystems
 
 - TypeScript strict mode; explicit interfaces for all inputs/outputs
-  (`MemoryRecordProps`, `TokenBudgetConfig`, `IdentityCapsuleProps`, affect
+  (`MemoryRecordProps`, `TokenBudgetConfig`, `IIdentityBlueprint`, affect
   vector shape, etc.).
 - Each subsystem must be unit-testable (Jest) with storage/window/LLM
   client injected, not accessed globally.
