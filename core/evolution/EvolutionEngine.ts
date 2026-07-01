@@ -33,7 +33,6 @@ export class EvolutionEngine {
     if (delta === 0) return;
 
     memoryIds.forEach(id => this.memoryRepository.adjustEmotionWeight(id, delta));
-    this.memoryRepository.flush();
   }
 
   private resolveDelta(metrics: IEvaluationMetrics): number {

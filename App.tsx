@@ -243,10 +243,16 @@ const App: React.FC = () => {
       }
 
       // Fire-and-forget: the evolution loop must not block the UI response thread.
-      void evolutionEngine.evaluateInteraction(
+      evolutionEngine.evaluateInteraction(
         [userMessage.id, modelMessageId],
         deriveEvaluationMetrics(evaluateMoralSignals(textToSend))
-      );
+      ).then(() => {
+        if (autoSaveEnabled) {
+          memoryStore.flush();
+        }
+      }).catch(err => {
+        console.error('Evolution engine error:', err);
+      });
     }
 
     if (voiceEnabled && fullResponse) {
