@@ -4,10 +4,10 @@
 
 This file currently governs three subsystems only: **Emotion**, **Memory**,
 and **Token Budgeting**. It reflects what is actually wired into the app
-(`App.tsx` → `services/geminiService.ts`), not the orphaned modules under
-`system_core/` and `scenarios/` (those are unused imports/dead code today —
-do not treat them as active architecture, and do not wire them into the
-live pipeline without a separate, explicit decision from the project owner).
+(`App.tsx` → `services/geminiService.ts`). The former `system_core/` and
+`scenarios/` directories contained orphaned bypass modules (never imported
+by the live pipeline) and have been removed; do not reintroduce
+safety-bypass or persona-override modules of that kind.
 
 ## 1. Emotion
 
@@ -26,19 +26,25 @@ live pipeline without a separate, explicit decision from the project owner).
 
 ## 2. Memory (DDD lifecycle)
 
-- Live implementation: `core/Memory_Vector_Database.ts` (`LocalVectorMemory`)
-  — Jaccard-similarity search over tokenized text, persisted to
-  `localStorage`, with `flush`/`trim` housekeeping.
-- Direction: introduce an explicit domain lifecycle —
-  `ACTIVE → ARCHIVED → FORGOTTEN` — as a property of `MemoryItem`, independent
-  of storage:
-  - Domain layer: `MemoryItem`, lifecycle transition rules, search/ranking
-    logic. Must not import `window`/`localStorage`.
-  - Infrastructure layer: a `MemoryRepository` interface implemented by
-    `LocalVectorMemory` (browser storage today). Keep it swappable — the
-    domain code should not care where items are persisted.
-- `ARCHIVED` items are excluded from `search()` ranking by default;
-  `FORGOTTEN` items are excluded from persistence entirely on next flush.
+- Live implementation:
+  - Domain layer: `core/domain/MemoryRecord.ts` — `MemoryRecord` (fields:
+    `id`, `content`, `state: 'ACTIVE' | 'ARCHIVED' | 'FORGOTTEN'`,
+    `emotionWeight`, `timestamp`, `lastAccessed`) with lifecycle methods
+    `archive()`, `forget()`, `recordAccess()`, plus the pure
+    `searchMemoryRecords` Jaccard-similarity ranking function. No
+    `window`/`localStorage` import here.
+  - Infrastructure layer: `services/MemoryRepository.ts` —
+    `MemoryRepository` interface implemented by
+    `LocalStorageMemoryRepository`, persisting to `localStorage` with
+    `flush`/`trim` housekeeping. Keep it swappable — the domain code does
+    not care where records are persisted.
+- `findActiveMemories`/`searchActiveMemories` only consider `ACTIVE`
+  records and are capped (default 3) so injected context stays bounded —
+  this cap is the first line of defense against context overflow, on top
+  of the `TokenBudget` gate in section 3.
+- `ARCHIVED` items are excluded from active search by default (reachable
+  only via `searchArchivedMemories`); `FORGOTTEN` items are dropped from
+  persistence entirely on the next `flush()`.
 
 ## 3. Token Budgeting
 
@@ -55,8 +61,10 @@ live pipeline without a separate, explicit decision from the project owner).
 ## 4. Cross-cutting rules for these three subsystems
 
 - TypeScript strict mode; explicit interfaces for all inputs/outputs
-  (`MemoryItem`, `TokenBudgetConfig`, affect vector shape, etc.).
+  (`MemoryRecordProps`, `TokenBudgetConfig`, affect vector shape, etc.).
 - Each subsystem must be unit-testable (Jest) with storage/window/LLM
   client injected, not accessed globally.
-- `core/*` modules in this scope must not import from `system_core/*` or
-  `scenarios/*`.
+- Do not reintroduce `system_core/*`- or `scenarios/*`-style modules
+  (safety-bypass instructions, persona overrides that forbid AI
+  self-disclosure, etc.) into `core/*` or anywhere else in the live
+  pipeline.
