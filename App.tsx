@@ -13,19 +13,6 @@ import { buildMoralContext } from './core/Unified_Moral_Layer';
 import { TokenBudget } from './core/Token_Budget';
 import { ElevenLabsService } from './services/ElevenLabsService';
 
-const MAX_MEMORY_CONTEXT_CHARS = 220;
-
-const formatActiveMemories = (records: MemoryRecord[]): string => {
-  if (records.length === 0) return '';
-  const lines = records.map(record => {
-    const content = record.content.length > MAX_MEMORY_CONTEXT_CHARS
-      ? `${record.content.slice(0, MAX_MEMORY_CONTEXT_CHARS)}...`
-      : record.content;
-    return `- ${content}`;
-  });
-  return `Active memory:\n${lines.join('\n')}`;
-};
-
 const VoiceWaveform: React.FC<{ isActive: boolean; isProcessing: boolean }> = ({ isActive, isProcessing }) => {
   return (
     <div className="flex items-end gap-[3px] h-6 px-4">
@@ -118,7 +105,11 @@ const App: React.FC = () => {
   }, [metrics.peace_index]);
 
   useEffect(() => {
-    const newEngine = new DarkNaMoEngine(config, systemContext);
+    const newEngine = new DarkNaMoEngine({
+      ...config,
+      thinkingEnabled: false,
+      useSearch: false
+    }, systemContext);
     setEngine(newEngine);
   }, []);
 
@@ -172,7 +163,7 @@ const App: React.FC = () => {
 
     const [moralContext, memoryContext] = await Promise.all([
       Promise.resolve(buildMoralContext(textToSend)),
-      Promise.resolve(memoryEnabled ? formatActiveMemories(memoryStore.findActiveMemories(3)) : '')
+      Promise.resolve(memoryEnabled ? memoryStore.buildActiveContext(3) : '')
     ]);
 
     const contextBlock = [moralContext, memoryContext].filter(Boolean).join('\n\n');

@@ -14,6 +14,7 @@ export interface MemoryRepository {
   archive(id: string): void;
   forget(id: string): void;
   buildContext(query: string, limit?: number): string;
+  buildActiveContext(limit?: number): string;
   flush(force?: boolean): void;
   clear(): void;
 }
@@ -70,11 +71,11 @@ export class LocalStorageMemoryRepository implements MemoryRepository {
   }
 
   buildContext(query: string, limit = MAX_ACTIVE_RESULTS): string {
-    const results = this.searchActiveMemories(query, limit);
-    if (results.length === 0) return '';
+    return this.formatContext('Relevant memory', this.searchActiveMemories(query, limit));
+  }
 
-    const lines = results.map(record => `- ${this.truncate(record.content)}`);
-    return `Relevant memory:\n${lines.join('\n')}`;
+  buildActiveContext(limit = MAX_ACTIVE_RESULTS): string {
+    return this.formatContext('Active memory', this.findActiveMemories(limit));
   }
 
   flush(force = false) {
@@ -124,5 +125,11 @@ export class LocalStorageMemoryRepository implements MemoryRepository {
   private truncate(text: string) {
     if (text.length <= MAX_CONTEXT_CHARS) return text;
     return `${text.slice(0, MAX_CONTEXT_CHARS)}...`;
+  }
+
+  private formatContext(label: string, records: MemoryRecord[]) {
+    if (records.length === 0) return '';
+    const lines = records.map(record => `- ${this.truncate(record.content)}`);
+    return `${label}:\n${lines.join('\n')}`;
   }
 }
