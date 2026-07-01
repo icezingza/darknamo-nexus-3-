@@ -6,13 +6,11 @@ import { DARK_NAMO_SYSTEM_INSTRUCTION, INITIAL_COMMAND } from './constants';
 import { Button } from './components/Button';
 import { INITIAL_METRICS } from './core/Desire_Metric_System';
 import { getActiveSubliminal } from './core/Subliminal_Processor';
-import { LocalVectorMemory } from './core/Memory_Vector_Database';
+import { MemoryRecord } from './core/domain/MemoryRecord';
+import { LocalStorageMemoryRepository } from './services/MemoryRepository';
 import { buildMoralContext } from './core/Unified_Moral_Layer';
 import { TokenBudget } from './core/Token_Budget';
 import { ElevenLabsService } from './services/ElevenLabsService';
-import { PENTHOUSE_NIGHT } from './scenarios/Midori_Penthouse_Night';
-import { PUBLIC_ENCOUNTER } from './scenarios/Forbidden_Public_Encounter';
-import { DEEP_BOND_RITUAL } from './scenarios/Deep_Bond_Ritual';
 
 const VoiceWaveform: React.FC<{ isActive: boolean; isProcessing: boolean }> = ({ isActive, isProcessing }) => {
   return (
@@ -64,7 +62,7 @@ const App: React.FC = () => {
     topP: 0.95
   });
 
-  const memoryStore = useMemo(() => new LocalVectorMemory(), []);
+  const memoryStore = useMemo(() => new LocalStorageMemoryRepository(), []);
   const tokenBudget = useMemo(() => new TokenBudget({
     maxTokens: 8192,
     reserveOutputTokens: config.maxOutputTokens,
@@ -195,12 +193,12 @@ const App: React.FC = () => {
     setIsStreaming(true);
 
     if (memoryEnabled) {
-      memoryStore.add({
+      memoryStore.save(new MemoryRecord({
         id: userMessage.id,
-        role: 'user',
-        text: textToSend,
+        content: `(user) ${textToSend}`,
+        emotionWeight: 0.5,
         timestamp: userMessage.timestamp.getTime()
-      });
+      }));
     }
 
     let fullResponse = '';
@@ -225,12 +223,12 @@ const App: React.FC = () => {
     }
 
     if (memoryEnabled && fullResponse) {
-      memoryStore.add({
+      memoryStore.save(new MemoryRecord({
         id: modelMessageId,
-        role: 'model',
-        text: fullResponse,
+        content: `(model) ${fullResponse}`,
+        emotionWeight: 0.5,
         timestamp: Date.now()
-      });
+      }));
       if (autoSaveEnabled) {
         memoryStore.flush();
       }
