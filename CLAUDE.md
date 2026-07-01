@@ -2,12 +2,12 @@
 
 ## Scope
 
-This file currently governs three subsystems only: **Emotion**, **Memory**,
-and **Token Budgeting**. It reflects what is actually wired into the app
-(`App.tsx` → `services/geminiService.ts`). The former `system_core/` and
-`scenarios/` directories contained orphaned bypass modules (never imported
-by the live pipeline) and have been removed; do not reintroduce
-safety-bypass or persona-override modules of that kind.
+This file currently governs four subsystems: **Emotion**, **Memory**,
+**Token Budgeting**, and **Identity**. It reflects what is actually wired
+into the app (`App.tsx` → `services/geminiService.ts`). The former
+`system_core/` and `scenarios/` directories contained orphaned bypass
+modules (never imported by the live pipeline) and have been removed; do
+not reintroduce safety-bypass or persona-override modules of that kind.
 
 ## 1. Emotion
 
@@ -58,10 +58,30 @@ safety-bypass or persona-override modules of that kind.
 - Do not remove or weaken the `TokenBudget` gate to "make room" for a
   feature; shrink the feature's context footprint instead.
 
-## 4. Cross-cutting rules for these three subsystems
+## 4. Identity
+
+- Live implementation: `core/identity/IdentityCapsule.ts` (`IdentityCapsule`)
+  — a model-agnostic persona container with four plain string-array fields
+  (`purpose`, `cognitiveStyle`, `emotionalPosture`, `ethicalConstraints`)
+  and a `getSystemContext()` formatter that renders them into one compact
+  prompt chunk. `core/identity/NamoIdentity.ts` holds the concrete NaMo
+  persona data (restructured, content-equivalent, from the old
+  `constants.ts` monolithic prompt string, which has been removed).
+- `getSystemContext()` output is passed once into `DarkNaMoEngine`'s
+  constructor (`services/geminiService.ts`) as `systemContext`, set as the
+  Gemini `systemInstruction` at session creation — this is the "Load the
+  Identity" step of the pipeline, done once per session rather than
+  resent per turn, to keep token usage bounded per rule 3.
+- Do not hardcode a new monolithic prompt string anywhere in `App.tsx` or
+  `services/*`; persona changes go through `IdentityCapsule` fields.
+- `IdentityCapsule` must stay pure data + string formatting — no LLM call,
+  no DOM/network/storage access, so it stays unit-testable in isolation.
+
+## 5. Cross-cutting rules for these subsystems
 
 - TypeScript strict mode; explicit interfaces for all inputs/outputs
-  (`MemoryRecordProps`, `TokenBudgetConfig`, affect vector shape, etc.).
+  (`MemoryRecordProps`, `TokenBudgetConfig`, `IdentityCapsuleProps`, affect
+  vector shape, etc.).
 - Each subsystem must be unit-testable (Jest) with storage/window/LLM
   client injected, not accessed globally.
 - Do not reintroduce `system_core/*`- or `scenarios/*`-style modules
