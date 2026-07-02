@@ -10,6 +10,7 @@ export interface MemoryRecordProps {
 }
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+const LOW_WEIGHT_ARCHIVE_THRESHOLD = 0.2;
 
 export class MemoryRecord {
   readonly id: string;
@@ -39,6 +40,13 @@ export class MemoryRecord {
 
   recordAccess(at: number = Date.now()) {
     this.lastAccessed = at;
+  }
+
+  adjustEmotionWeight(delta: number) {
+    this.emotionWeight = clamp01(this.emotionWeight + delta);
+    if (this.emotionWeight < LOW_WEIGHT_ARCHIVE_THRESHOLD) {
+      this.archive();
+    }
   }
 
   toProps(): MemoryRecordProps {

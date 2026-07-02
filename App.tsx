@@ -9,8 +9,10 @@ import { getActiveSubliminal } from './core/Subliminal_Processor';
 import { MemoryRecord } from './core/domain/MemoryRecord';
 import { LocalStorageMemoryRepository } from './services/MemoryRepository';
 import { NAMO_IDENTITY } from './core/identity/NamoIdentity';
-import { buildMoralContext } from './core/Unified_Moral_Layer';
+import { buildMoralContext, evaluateMoralSignals } from './core/Unified_Moral_Layer';
 import { TokenBudget } from './core/Token_Budget';
+import { EvolutionEngine, deriveEvaluationMetrics } from './core/evolution/EvolutionEngine';
+import { TelemetryService } from './core/monitoring/TelemetryService';
 import { ElevenLabsService } from './services/ElevenLabsService';
 
 const VoiceWaveform: React.FC<{ isActive: boolean; isProcessing: boolean }> = ({ isActive, isProcessing }) => {
@@ -64,6 +66,8 @@ const App: React.FC = () => {
   });
 
   const memoryStore = useMemo(() => new LocalStorageMemoryRepository(), []);
+  const evolutionEngine = useMemo(() => new EvolutionEngine(memoryStore), [memoryStore]);
+  const telemetryService = useMemo(() => new TelemetryService(), []);
   const systemContext = useMemo(() => NAMO_IDENTITY.getSystemContext(), []);
   const tokenBudget = useMemo(() => new TokenBudget({
     maxTokens: 8192,
@@ -151,6 +155,8 @@ const App: React.FC = () => {
     const textToSend = textOverride || input;
     if (!textToSend.trim() || !engine || isStreaming) return;
 
+    const sendStartedAt = Date.now();
+
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -209,17 +215,27 @@ const App: React.FC = () => {
     }
 
     let fullResponse = '';
+    let ttiRecorded = false;
     try {
       const stream = engine.sendMessageStream(textToSend, {
         context: contextBlock,
         cache: {
           enabled: cacheEnabled,
           ttlMs: 300000
+        },
+        onUsageMetadata: usage => {
+          if (usage.totalTokenCount) {
+            telemetryService.recordTokenUsage(usage.totalTokenCount);
+          }
         }
       });
       for await (const chunk of stream) {
+        if (!ttiRecorded) {
+          ttiRecorded = true;
+          telemetryService.recordLatency(Date.now() - sendStartedAt);
+        }
         fullResponse += chunk;
-        setMessages(prev => prev.map(m => 
+        setMessages(prev => prev.map(m =>
           m.id === modelMessageId ? { ...m, text: fullResponse } : m
         ));
       }
@@ -239,6 +255,22 @@ const App: React.FC = () => {
       if (autoSaveEnabled) {
         memoryStore.flush();
       }
+
+      // Fire-and-forget: the evolution loop must not block the UI response thread.
+      evolutionEngine.evaluateInteraction(
+        [userMessage.id, modelMessageId],
+        deriveEvaluationMetrics(evaluateMoralSignals(textToSend))
+      ).then(() => {
+        if (autoSaveEnabled) {
+          memoryStore.flush();
+        }
+        telemetryService.recordMemoryDistribution(
+          memoryStore.countActiveMemories(),
+          memoryStore.countArchivedMemories()
+        );
+      }).catch(err => {
+        console.error('Evolution engine error:', err);
+      });
     }
 
     if (voiceEnabled && fullResponse) {
@@ -263,7 +295,9 @@ const App: React.FC = () => {
     tokenBudget,
     systemContext,
     messages,
-    memoryStore
+    memoryStore,
+    evolutionEngine,
+    telemetryService
   ]);
 
   const handleReplay = async (text: string) => {

@@ -7,9 +7,16 @@ type CacheOptions = {
   ttlMs: number;
 };
 
+type UsageMetadata = {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  totalTokenCount?: number;
+};
+
 type SendMessageOptions = {
   context?: string;
   cache?: CacheOptions;
+  onUsageMetadata?: (usage: UsageMetadata) => void;
 };
 
 export class DarkNaMoEngine {
@@ -91,6 +98,7 @@ export class DarkNaMoEngine {
     try {
       const result = await this.chat.sendMessageStream({ message: payload });
       let fullResponse = "";
+      let lastUsageMetadata: UsageMetadata | undefined;
       for await (const chunk of result) {
         // Correctly access the .text property of GenerateContentResponse chunk.
         const response = chunk as GenerateContentResponse;
@@ -98,6 +106,12 @@ export class DarkNaMoEngine {
           fullResponse += response.text;
           yield response.text;
         }
+        if (response.usageMetadata) {
+          lastUsageMetadata = response.usageMetadata;
+        }
+      }
+      if (lastUsageMetadata) {
+        options.onUsageMetadata?.(lastUsageMetadata);
       }
       if (cacheKey && fullResponse) {
         this.writeCache(cacheKey, fullResponse, cacheOptions?.ttlMs ?? 300000);
