@@ -3,6 +3,7 @@ export interface ISessionMetrics {
   averageLatencyMs: number;
   activeMemoryCount: number;
   archivedMemoryCount: number;
+  cohortId?: string;
 }
 
 export class TelemetryService {
@@ -11,6 +12,11 @@ export class TelemetryService {
   private latencySumMs = 0;
   private activeMemoryCount = 0;
   private archivedMemoryCount = 0;
+  private cohortId?: string;
+
+  constructor(cohortId?: string) {
+    this.cohortId = cohortId;
+  }
 
   recordTokenUsage(tokens: number): void {
     this.totalTokensUsed += tokens;
@@ -29,12 +35,17 @@ export class TelemetryService {
     this.emit('memory_distribution', { activeCount, archivedCount });
   }
 
+  recordEvolutionMetrics(metrics: Record<string, unknown>): void {
+    this.emit('evolution_metrics', metrics);
+  }
+
   getSnapshot(): ISessionMetrics {
     return {
       totalTokensUsed: this.totalTokensUsed,
       averageLatencyMs: this.getAverageLatencyMs(),
       activeMemoryCount: this.activeMemoryCount,
-      archivedMemoryCount: this.archivedMemoryCount
+      archivedMemoryCount: this.archivedMemoryCount,
+      cohortId: this.cohortId
     };
   }
 
@@ -44,11 +55,13 @@ export class TelemetryService {
 
   // Deferred + guarded: today's sink is console.log, tomorrow's may be a
   // network call to Prometheus/Grafana. Either way, telemetry must never
-  // throw back into the caller's chat flow.
+  // throw back into the caller's chat flow. cohortId is stamped on every
+  // line here so 'control' vs 'variant' can be compared without every
+  // record* call site having to pass it through manually.
   private emit(event: string, payload: Record<string, unknown>): void {
     queueMicrotask(() => {
       try {
-        console.log(JSON.stringify({ event, timestamp: Date.now(), ...payload }));
+        console.log(JSON.stringify({ event, timestamp: Date.now(), cohortId: this.cohortId, ...payload }));
       } catch (error) {
         console.warn('TelemetryService: failed to log event', event, error);
       }
