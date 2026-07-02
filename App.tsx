@@ -14,6 +14,7 @@ import { TokenBudget } from './core/Token_Budget';
 import { EvolutionEngine, deriveEvaluationMetrics } from './core/evolution/EvolutionEngine';
 import { TelemetryService } from './core/monitoring/TelemetryService';
 import { ABTestManager } from './core/testing/ABTestManager';
+import { DataExporter } from './core/pipeline/DataExporter';
 import { ElevenLabsService } from './services/ElevenLabsService';
 
 const VoiceWaveform: React.FC<{ isActive: boolean; isProcessing: boolean }> = ({ isActive, isProcessing }) => {
@@ -71,6 +72,7 @@ const App: React.FC = () => {
   const abTestManager = useMemo(() => new ABTestManager(), []);
   const cohort = useMemo(() => abTestManager.getCohort(), [abTestManager]);
   const telemetryService = useMemo(() => new TelemetryService(cohort), [cohort]);
+  const dataExporter = useMemo(() => new DataExporter(memoryStore, telemetryService), [memoryStore, telemetryService]);
   const systemContext = useMemo(() => NAMO_IDENTITY.getSystemContext(), []);
   const tokenBudget = useMemo(() => new TokenBudget({
     maxTokens: 8192,
@@ -306,6 +308,17 @@ const App: React.FC = () => {
     cohort
   ]);
 
+  const handleExportTrainingData = () => {
+    const jsonl = dataExporter.exportToJsonl();
+    const blob = new Blob([jsonl], { type: 'application/jsonl' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `namo-training-data-${Date.now()}.jsonl`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   const handleReplay = async (text: string) => {
     if (isSpeaking || isVoiceLoading) return;
     setIsVoiceLoading(true);
@@ -419,6 +432,12 @@ const App: React.FC = () => {
           >
             Reset Session
           </Button>
+          <button
+            onClick={handleExportTrainingData}
+            className="w-full px-2 py-1.5 bg-zinc-900 border border-zinc-800 text-[9px] mono text-zinc-500 hover:border-emerald-900 hover:text-emerald-500 transition-all rounded uppercase"
+          >
+            Export_Training_Data
+          </button>
         </div>
       </aside>
 

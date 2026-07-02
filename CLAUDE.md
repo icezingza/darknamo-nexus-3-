@@ -2,9 +2,9 @@
 
 ## Scope
 
-This file currently governs seven subsystems: **Emotion**, **Memory**,
-**Token Budgeting**, **Identity**, **Evolution**, **Monitoring**, and
-**Experimentation**. It reflects what is actually wired
+This file currently governs eight subsystems: **Emotion**, **Memory**,
+**Token Budgeting**, **Identity**, **Evolution**, **Monitoring**,
+**Experimentation**, and **Data Export**. It reflects what is actually wired
 into the app (`App.tsx` → `services/geminiService.ts`). The former
 `system_core/` and `scenarios/` directories contained orphaned bypass
 modules (never imported by the live pipeline) and have been removed; do
@@ -191,7 +191,32 @@ not reintroduce safety-bypass or persona-override modules of that kind.
   `sessionId`/`storageKey` through its constructor rather than reading
   globals directly.
 
-## 8. Cross-cutting rules for these subsystems
+## 8. Data Export (fine-tuning pipeline)
+
+- Live implementation: `core/pipeline/DataExporter.ts` (`DataExporter`)
+  — constructor-injected with `MemoryRepository` and `TelemetryService`
+  (no global access). `exportToJsonl(minEmotionWeight = 0.8)` filters to
+  `MemoryRecord`s above the weight threshold via
+  `MemoryRepository.findHighValueMemories`, pairs adjacent
+  `(user) → (model)` entries by timestamp into
+  `{ messages: [{role, content}, ...] }` examples, and returns
+  newline-delimited JSON.
+- PII scrubbing (`scrubPII`) runs on every message's content before it's
+  serialized — basic email/phone regexes, not an exhaustive detector.
+  Any future field added to the exported payload must go through the
+  same scrub, not be appended raw.
+- Note: with the Evolution engine's current reward magnitude (`+0.05`,
+  section 5) a memory can only ever reach `~0.55` from a single
+  evaluation, so the default `0.8` threshold yields nothing today. That's
+  a pre-existing characteristic of the reward tuning, not a bug in this
+  module — don't silently raise the reward delta to "fix" it without a
+  deliberate decision, since that also changes Evolution's live behavior.
+- Triggered from `App.tsx` via a sidebar button
+  (`Export_Training_Data`) that builds a `Blob` and downloads a
+  `.jsonl` file client-side — no network call, no data leaves the
+  browser except to the user's own disk.
+
+## 9. Cross-cutting rules for these subsystems
 
 - TypeScript strict mode; explicit interfaces for all inputs/outputs
   (`MemoryRecordProps`, `TokenBudgetConfig`, `IIdentityBlueprint`,

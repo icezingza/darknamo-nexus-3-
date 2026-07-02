@@ -39,6 +39,10 @@ export class TelemetryService {
     this.emit('evolution_metrics', metrics);
   }
 
+  recordDataExport(exampleCount: number): void {
+    this.emit('data_export', { exampleCount });
+  }
+
   getSnapshot(): ISessionMetrics {
     return {
       totalTokensUsed: this.totalTokensUsed,
