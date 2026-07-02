@@ -2,8 +2,8 @@
 
 ## Scope
 
-This file currently governs five subsystems: **Emotion**, **Memory**,
-**Token Budgeting**, **Identity**, and **Evolution**. It reflects what is actually wired
+This file currently governs six subsystems: **Emotion**, **Memory**,
+**Token Budgeting**, **Identity**, **Evolution**, and **Monitoring**. It reflects what is actually wired
 into the app (`App.tsx` → `services/geminiService.ts`). The former
 `system_core/` and `scenarios/` directories contained orphaned bypass
 modules (never imported by the live pipeline) and have been removed; do
@@ -109,15 +109,52 @@ not reintroduce safety-bypass or persona-override modules of that kind.
   toneScore/conflictLevel, so it doesn't need to be re-derived at the
   call site.
 - `App.tsx` calls `evaluateInteraction` after saving the model's response
-  to memory, without `await`-ing it (`void evolutionEngine.evaluateInteraction(...)`)
-  so it never blocks the UI response thread; `evaluateInteraction` itself
-  yields to the event loop (`await Promise.resolve()`) before doing any
-  work, so it runs after the current task rather than inline.
+  to memory, without `await`-ing it — chained with `.then()`/`.catch()`
+  instead (the `.then()` handles the gated `flush()` and telemetry
+  recording, the `.catch()` logs rather than lets a rejection go
+  unhandled) — so it never blocks the UI response thread.
+  `evaluateInteraction` itself yields to the event loop
+  (`await Promise.resolve()`) before doing any work, so it runs after
+  the current task rather than inline.
 - `EvolutionEngine` must stay swappable/testable: only talk to
   `MemoryRepository` through its public interface, never reach into
   `MemoryRecord` internals directly.
+- `EvolutionEngine` must not force persistence itself (no `flush()` calls
+  inside it) — that decision belongs to the caller, which knows the
+  user's `autoSaveEnabled` preference; a domain/application service
+  should not silently override it.
 
-## 6. Cross-cutting rules for these subsystems
+## 6. Monitoring (telemetry)
+
+- Live implementation: `core/monitoring/TelemetryService.ts`
+  (`TelemetryService`) — tracks `ISessionMetrics` (`totalTokensUsed`,
+  `averageLatencyMs`, `activeMemoryCount`, `archivedMemoryCount`) and
+  exposes `recordTokenUsage`, `recordLatency`, `recordMemoryDistribution`,
+  and `getSnapshot()`. No constructor dependencies — plain in-memory
+  counters, unit-testable in isolation.
+- Every `record*` call synchronously updates the in-memory counters, then
+  defers the actual log line via `queueMicrotask` wrapped in try/catch
+  (`emit`), so a future swap from `console.log` to a real network sink
+  (Prometheus/Grafana) can't throw back into the caller and can't block
+  the calling code.
+- Wired into `App.tsx`'s per-message flow:
+  - `recordLatency` — timer starts when `handleSendMessage` begins and
+    stops on the first streamed chunk (Time-To-Interact), not on stream
+    completion.
+  - `recordTokenUsage` — fed from `DarkNaMoEngine.sendMessageStream`'s new
+    `onUsageMetadata` callback (`services/geminiService.ts`), which
+    surfaces the Gemini API's own `usageMetadata.totalTokenCount` from the
+    stream rather than re-estimating it via `TokenBudget`'s heuristic.
+  - `recordMemoryDistribution` — queried from `MemoryRepository`
+    (`countActiveMemories()`/`countArchivedMemories()`) inside the
+    Evolution engine's existing `.then()` callback (section 5), so the
+    count reflects state *after* that turn's reward/penalty/auto-archive
+    has applied.
+- Do not make `TelemetryService` a hard global singleton; instantiate it
+  like the other services (`useMemo` in `App.tsx`) so it stays injectable
+  for tests.
+
+## 7. Cross-cutting rules for these subsystems
 
 - TypeScript strict mode; explicit interfaces for all inputs/outputs
   (`MemoryRecordProps`, `TokenBudgetConfig`, `IIdentityBlueprint`, affect

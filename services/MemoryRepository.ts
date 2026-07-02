@@ -14,6 +14,8 @@ export interface MemoryRepository {
   archive(id: string): void;
   forget(id: string): void;
   adjustEmotionWeight(id: string, delta: number): void;
+  countActiveMemories(): number;
+  countArchivedMemories(): number;
   buildContext(query: string, limit?: number): string;
   buildActiveContext(limit?: number): string;
   flush(force?: boolean): void;
@@ -76,6 +78,14 @@ export class LocalStorageMemoryRepository implements MemoryRepository {
     if (!record) return;
     record.adjustEmotionWeight(delta);
     this.dirty = true;
+  }
+
+  countActiveMemories(): number {
+    return this.activeRecords().length;
+  }
+
+  countArchivedMemories(): number {
+    return this.records.filter(record => record.state === 'ARCHIVED').length;
   }
 
   buildContext(query: string, limit = MAX_ACTIVE_RESULTS): string {
