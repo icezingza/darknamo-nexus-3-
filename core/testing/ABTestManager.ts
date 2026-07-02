@@ -38,13 +38,21 @@ export class ABTestManager {
   }
 
   private loadStoredCohort(): Cohort | null {
-    if (typeof window === 'undefined' || !window.localStorage) return null;
-    const raw = window.localStorage.getItem(this.storageKey);
-    return raw === 'control' || raw === 'variant' ? raw : null;
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = window.localStorage.getItem(this.storageKey);
+      return raw === 'control' || raw === 'variant' ? raw : null;
+    } catch {
+      return null;
+    }
   }
 
   private persistCohort(cohort: Cohort): void {
-    if (typeof window === 'undefined' || !window.localStorage) return;
-    window.localStorage.setItem(this.storageKey, cohort);
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(this.storageKey, cohort);
+    } catch {
+      // Storage may be blocked (private browsing, enterprise policy); fail silently.
+    }
   }
 }
