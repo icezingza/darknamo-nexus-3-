@@ -27,14 +27,19 @@ interface ParsedEntry {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
+  emotionWeight: number;
 }
 
 const parseRecord = (record: MemoryRecord): ParsedEntry | null => {
   const userMatch = record.content.match(/^\(user\)\s?([\s\S]*)$/);
-  if (userMatch) return { role: 'user', content: userMatch[1], timestamp: record.timestamp };
+  if (userMatch) {
+    return { role: 'user', content: userMatch[1], timestamp: record.timestamp, emotionWeight: record.emotionWeight };
+  }
 
   const modelMatch = record.content.match(/^\(model\)\s?([\s\S]*)$/);
-  if (modelMatch) return { role: 'assistant', content: modelMatch[1], timestamp: record.timestamp };
+  if (modelMatch) {
+    return { role: 'assistant', content: modelMatch[1], timestamp: record.timestamp, emotionWeight: record.emotionWeight };
+  }
 
   return null;
 };
@@ -46,13 +51,18 @@ export class DataExporter {
   ) {}
 
   exportToJsonl(minEmotionWeight = HIGH_VALUE_EMOTION_WEIGHT): string {
-    const records = this.memoryRepository.findHighValueMemories(minEmotionWeight);
-    const examples = this.buildExamples(records);
+    // Fetch every non-forgotten record (not pre-filtered by weight) so pairing
+    // below always lines up adjacent turns from the same conversation, then
+    // filter the resulting pairs by weight -- filtering records individually
+    // before pairing would drop one side of a turn and mispair leftovers from
+    // unrelated turns.
+    const records = this.memoryRepository.findHighValueMemories(-1);
+    const examples = this.buildExamples(records, minEmotionWeight);
     this.telemetryService.recordDataExport(examples.length);
     return examples.map(example => JSON.stringify(example)).join('\n');
   }
 
-  private buildExamples(records: MemoryRecord[]): JsonlExample[] {
+  private buildExamples(records: MemoryRecord[], minEmotionWeight: number): JsonlExample[] {
     const parsed = records
       .map(parseRecord)
       .filter((entry): entry is ParsedEntry => entry !== null)
@@ -64,12 +74,14 @@ export class DataExporter {
       const current = parsed[i];
       const next = parsed[i + 1];
       if (current.role === 'user' && next.role === 'assistant') {
-        examples.push({
-          messages: [
-            { role: 'user', content: scrubPII(current.content) },
-            { role: 'assistant', content: scrubPII(next.content) }
-          ]
-        });
+        if (current.emotionWeight > minEmotionWeight || next.emotionWeight > minEmotionWeight) {
+          examples.push({
+            messages: [
+              { role: 'user', content: scrubPII(current.content) },
+              { role: 'assistant', content: scrubPII(next.content) }
+            ]
+          });
+        }
         i += 2;
       } else {
         i += 1;

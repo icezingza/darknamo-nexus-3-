@@ -315,8 +315,12 @@ const App: React.FC = () => {
     const link = document.createElement('a');
     link.href = url;
     link.download = `namo-training-data-${Date.now()}.jsonl`;
+    document.body.appendChild(link);
     link.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+      link.remove();
+    }, 100);
   };
 
   const handleReplay = async (text: string) => {
