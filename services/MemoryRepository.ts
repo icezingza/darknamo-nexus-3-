@@ -27,6 +27,11 @@ export class LocalStorageMemoryRepository implements MemoryRepository {
   private storageKey: string;
   private dirty = false;
   private lastFlush = 0;
+  // Set false the first time localStorage throws (private browsing, enterprise
+  // policy, quota, etc.) so we stop retrying it for the rest of the session.
+  // `records` is the actual in-memory store either way — every read/write
+  // method above operates on it directly, never on localStorage.
+  private storageAvailable = true;
 
   constructor(storageKey = STORAGE_KEY) {
     this.storageKey = storageKey;
@@ -115,24 +120,31 @@ export class LocalStorageMemoryRepository implements MemoryRepository {
   }
 
   private load(): MemoryRecord[] {
-    if (typeof window === 'undefined' || !window.localStorage) return [];
-    const raw = window.localStorage.getItem(this.storageKey);
-    if (!raw) return [];
+    if (typeof window === 'undefined' || !this.storageAvailable) return [];
     try {
+      const raw = window.localStorage.getItem(this.storageKey);
+      if (!raw) return [];
       const parsed = JSON.parse(raw) as MemoryRecordProps[];
       return Array.isArray(parsed) ? parsed.map(MemoryRecord.fromProps) : [];
-    } catch {
+    } catch (error) {
+      console.warn('MemoryRepository: localStorage unavailable, falling back to in-memory only', error);
+      this.storageAvailable = false;
       return [];
     }
   }
 
   private persist() {
-    if (typeof window === 'undefined' || !window.localStorage) return;
+    if (typeof window === 'undefined' || !this.storageAvailable) return;
     this.records = this.records.filter(record => record.state !== 'FORGOTTEN');
-    window.localStorage.setItem(
-      this.storageKey,
-      JSON.stringify(this.records.map(record => record.toProps()))
-    );
+    try {
+      window.localStorage.setItem(
+        this.storageKey,
+        JSON.stringify(this.records.map(record => record.toProps()))
+      );
+    } catch (error) {
+      console.warn('MemoryRepository: failed to persist to localStorage, continuing in-memory only', error);
+      this.storageAvailable = false;
+    }
   }
 
   private trim() {
