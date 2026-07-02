@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { DarkNaMoEngine } from './services/geminiService';
+import { IModelProvider } from './core/providers/IModelProvider';
+import { ModelRegistry } from './core/providers/ModelRegistry';
 import { Message, EngineConfig, Metrics } from './types';
 import { INITIAL_COMMAND } from './constants';
 import { Button } from './components/Button';
@@ -44,7 +45,7 @@ const App: React.FC = () => {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isVoiceLoading, setIsVoiceLoading] = useState(false);
   const [isLiveMode, setIsLiveMode] = useState(false);
-  const [engine, setEngine] = useState<DarkNaMoEngine | null>(null);
+  const [engine, setEngine] = useState<IModelProvider | null>(null);
   
   const [thinkingEnabled, setThinkingEnabled] = useState(false);
   const [searchEnabled, setSearchEnabled] = useState(false);
@@ -73,6 +74,7 @@ const App: React.FC = () => {
   const cohort = useMemo(() => abTestManager.getCohort(), [abTestManager]);
   const telemetryService = useMemo(() => new TelemetryService(cohort), [cohort]);
   const dataExporter = useMemo(() => new DataExporter(memoryStore, telemetryService), [memoryStore, telemetryService]);
+  const modelRegistry = useMemo(() => new ModelRegistry(), []);
   const systemContext = useMemo(() => NAMO_IDENTITY.getSystemContext(), []);
   const tokenBudget = useMemo(() => new TokenBudget({
     maxTokens: 8192,
@@ -114,7 +116,7 @@ const App: React.FC = () => {
   }, [metrics.peace_index]);
 
   useEffect(() => {
-    const newEngine = new DarkNaMoEngine({
+    const newEngine = modelRegistry.createProvider({
       ...config,
       thinkingEnabled: false,
       useSearch: false
@@ -222,27 +224,28 @@ const App: React.FC = () => {
     let fullResponse = '';
     let ttiRecorded = false;
     try {
-      const stream = engine.sendMessageStream(textToSend, {
-        context: contextBlock,
-        cache: {
-          enabled: cacheEnabled,
-          ttlMs: 300000
-        },
-        onUsageMetadata: usage => {
-          if (usage.totalTokenCount) {
-            telemetryService.recordTokenUsage(usage.totalTokenCount);
+      const usage = await engine.generateStream(
+        {
+          message: textToSend,
+          context: contextBlock,
+          cache: {
+            enabled: cacheEnabled,
+            ttlMs: 300000
           }
+        },
+        chunk => {
+          if (!ttiRecorded) {
+            ttiRecorded = true;
+            telemetryService.recordLatency(Date.now() - sendStartedAt);
+          }
+          fullResponse += chunk;
+          setMessages(prev => prev.map(m =>
+            m.id === modelMessageId ? { ...m, text: fullResponse } : m
+          ));
         }
-      });
-      for await (const chunk of stream) {
-        if (!ttiRecorded) {
-          ttiRecorded = true;
-          telemetryService.recordLatency(Date.now() - sendStartedAt);
-        }
-        fullResponse += chunk;
-        setMessages(prev => prev.map(m =>
-          m.id === modelMessageId ? { ...m, text: fullResponse } : m
-        ));
+      );
+      if (usage.totalTokenCount) {
+        telemetryService.recordTokenUsage(usage.totalTokenCount);
       }
     } catch (err) {
       console.error(err);
