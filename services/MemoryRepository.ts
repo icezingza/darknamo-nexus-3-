@@ -16,6 +16,7 @@ export interface MemoryRepository {
   adjustEmotionWeight(id: string, delta: number): void;
   countActiveMemories(): number;
   countArchivedMemories(): number;
+  findHighValueMemories(minEmotionWeight: number): MemoryRecord[];
   buildContext(query: string, limit?: number): string;
   buildActiveContext(limit?: number): string;
   flush(force?: boolean): void;
@@ -91,6 +92,12 @@ export class LocalStorageMemoryRepository implements MemoryRepository {
 
   countArchivedMemories(): number {
     return this.records.filter(record => record.state === 'ARCHIVED').length;
+  }
+
+  findHighValueMemories(minEmotionWeight: number): MemoryRecord[] {
+    return this.records.filter(
+      record => record.state !== 'FORGOTTEN' && record.emotionWeight > minEmotionWeight
+    );
   }
 
   buildContext(query: string, limit = MAX_ACTIVE_RESULTS): string {

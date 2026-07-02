@@ -1,25 +1,8 @@
-
 import { GoogleGenAI, GenerateContentResponse, Chat, Modality } from "@google/genai";
-import { EngineConfig } from "../types";
+import { EngineConfig } from "../../types";
+import { AssembledPromptPayload, IModelProvider, UsageMetrics } from "./IModelProvider";
 
-type CacheOptions = {
-  enabled: boolean;
-  ttlMs: number;
-};
-
-type UsageMetadata = {
-  promptTokenCount?: number;
-  candidatesTokenCount?: number;
-  totalTokenCount?: number;
-};
-
-type SendMessageOptions = {
-  context?: string;
-  cache?: CacheOptions;
-  onUsageMetadata?: (usage: UsageMetadata) => void;
-};
-
-export class DarkNaMoEngine {
+export class GeminiProvider implements IModelProvider {
   private ai: GoogleGenAI;
   private chat: Chat | null = null;
   private config: EngineConfig;
@@ -79,50 +62,50 @@ export class DarkNaMoEngine {
     }
   }
 
-  public async* sendMessageStream(message: string, options: SendMessageOptions = {}) {
+  public async generateStream(payload: AssembledPromptPayload, onChunk: (chunk: string) => void): Promise<UsageMetrics> {
     if (!this.chat) throw new Error("Chat engine not initialized");
 
-    const context = options.context?.trim();
-    const payload = context ? `${context}\n\nUser: ${message}` : message;
-    const cacheOptions = options.cache;
-    const cacheKey = cacheOptions?.enabled ? this.buildCacheKey(payload) : null;
+    const context = payload.context?.trim();
+    const message = context ? `${context}\n\nUser: ${payload.message}` : payload.message;
+    const cacheOptions = payload.cache;
+    const cacheKey = cacheOptions?.enabled ? this.buildCacheKey(message) : null;
 
     if (cacheKey) {
       const cached = this.readCache(cacheKey);
       if (cached) {
-        yield cached;
-        return;
+        onChunk(cached);
+        return {};
       }
     }
 
     try {
-      const result = await this.chat.sendMessageStream({ message: payload });
+      const result = await this.chat.sendMessageStream({ message });
       let fullResponse = "";
-      let lastUsageMetadata: UsageMetadata | undefined;
+      let lastUsageMetadata: UsageMetrics = {};
       for await (const chunk of result) {
         // Correctly access the .text property of GenerateContentResponse chunk.
         const response = chunk as GenerateContentResponse;
         if (response.text) {
           fullResponse += response.text;
-          yield response.text;
+          onChunk(response.text);
         }
         if (response.usageMetadata) {
           lastUsageMetadata = response.usageMetadata;
         }
       }
-      if (lastUsageMetadata) {
-        options.onUsageMetadata?.(lastUsageMetadata);
-      }
       if (cacheKey && fullResponse) {
         this.writeCache(cacheKey, fullResponse, cacheOptions?.ttlMs ?? 300000);
       }
+      return lastUsageMetadata;
     } catch (error) {
       console.error("Gemini API Error:", error);
-      yield "⚠️ Engine Failure: connection to singularity lost.";
+      onChunk("⚠️ Engine Failure: connection to singularity lost.");
+      return {};
     }
   }
 
-  // Live API Connection
+  // Live API Connection -- audio-specific, not part of the abstracted
+  // IModelProvider surface since not every provider will support it.
   public connectLive(callbacks: any) {
     return this.ai.live.connect({
       model: 'gemini-2.5-flash-native-audio-preview-09-2025',

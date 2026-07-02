@@ -2,13 +2,14 @@
 
 ## Scope
 
-This file currently governs seven subsystems: **Emotion**, **Memory**,
-**Token Budgeting**, **Identity**, **Evolution**, **Monitoring**, and
-**Experimentation**. It reflects what is actually wired
-into the app (`App.tsx` → `services/geminiService.ts`). The former
-`system_core/` and `scenarios/` directories contained orphaned bypass
-modules (never imported by the live pipeline) and have been removed; do
-not reintroduce safety-bypass or persona-override modules of that kind.
+This file currently governs nine subsystems: **Emotion**, **Memory**,
+**Token Budgeting**, **Identity**, **Evolution**, **Monitoring**,
+**Experimentation**, **Data Export**, and **Model Providers**. It reflects
+what is actually wired into the app (`App.tsx` → `core/providers/`). The
+former `system_core/` and `scenarios/` directories contained orphaned
+bypass modules (never imported by the live pipeline) and have been
+removed; do not reintroduce safety-bypass or persona-override modules of
+that kind.
 
 ## 1. Emotion
 
@@ -81,10 +82,11 @@ not reintroduce safety-bypass or persona-override modules of that kind.
   removed).
 - Two output formatters, two different cadences:
   - `getSystemContext()` — full bullet-list rendering, passed once into
-    `DarkNaMoEngine`'s constructor (`services/geminiService.ts`) as
-    `systemContext`, set as the Gemini `systemInstruction` at session
-    creation. This is the "Load the Identity" step, done once per session
-    rather than resent per turn, to keep token usage bounded per rule 3.
+    the active `IModelProvider`'s constructor (section 9, e.g.
+    `GeminiProvider`) as `systemContext`, set as the Gemini
+    `systemInstruction` at session creation. This is the "Load the
+    Identity" step, done once per session rather than resent per turn, to
+    keep token usage bounded per rule 3.
   - `getDistilledContext(currentEmotion, cohort)` — a single-line,
     label-free compression of the same four fields plus the current
     per-turn emotion/Dharma read (`buildMoralContext`'s output). Called
@@ -153,10 +155,11 @@ not reintroduce safety-bypass or persona-override modules of that kind.
   - `recordLatency` — timer starts when `handleSendMessage` begins and
     stops on the first streamed chunk (Time-To-Interact), not on stream
     completion.
-  - `recordTokenUsage` — fed from `DarkNaMoEngine.sendMessageStream`'s new
-    `onUsageMetadata` callback (`services/geminiService.ts`), which
-    surfaces the Gemini API's own `usageMetadata.totalTokenCount` from the
-    stream rather than re-estimating it via `TokenBudget`'s heuristic.
+  - `recordTokenUsage` — fed from the resolved `UsageMetrics` returned by
+    `IModelProvider.generateStream()` (section 9), which for
+    `GeminiProvider` surfaces the Gemini API's own
+    `usageMetadata.totalTokenCount` from the stream rather than
+    re-estimating it via `TokenBudget`'s heuristic.
   - `recordMemoryDistribution` — queried from `MemoryRepository`
     (`countActiveMemories()`/`countArchivedMemories()`) inside the
     Evolution engine's existing `.then()` callback (section 5), so the
@@ -191,7 +194,65 @@ not reintroduce safety-bypass or persona-override modules of that kind.
   `sessionId`/`storageKey` through its constructor rather than reading
   globals directly.
 
-## 8. Cross-cutting rules for these subsystems
+## 8. Data Export (fine-tuning pipeline)
+
+- Live implementation: `core/pipeline/DataExporter.ts` (`DataExporter`)
+  — constructor-injected with `MemoryRepository` and `TelemetryService`
+  (no global access). `exportToJsonl(minEmotionWeight = 0.8)` fetches
+  *all* non-forgotten `MemoryRecord`s (`findHighValueMemories(-1)`),
+  pairs adjacent `(user) → (model)` entries by timestamp first, and only
+  then keeps a pair if either side's `emotionWeight` clears the
+  threshold. Filtering records individually before pairing would drop
+  one side of a turn and mispair leftovers with an unrelated turn — do
+  not reorder this back.
+- PII scrubbing (`scrubPII`) runs on every message's content before it's
+  serialized — basic email/phone regexes, not an exhaustive detector.
+  Any future field added to the exported payload must go through the
+  same scrub, not be appended raw.
+- Note: with the Evolution engine's current reward magnitude (`+0.05`,
+  section 5) a memory can only ever reach `~0.55` from a single
+  evaluation, so the default `0.8` threshold yields nothing today. That's
+  a pre-existing characteristic of the reward tuning, not a bug in this
+  module — don't silently raise the reward delta to "fix" it without a
+  deliberate decision, since that also changes Evolution's live behavior.
+- Triggered from `App.tsx` via a sidebar button
+  (`Export_Training_Data`) that builds a `Blob` and downloads a
+  `.jsonl` file client-side — no network call, no data leaves the
+  browser except to the user's own disk.
+
+## 9. Model Providers
+
+- Live implementation: `core/providers/IModelProvider.ts` defines the
+  interface every LLM backend must satisfy —
+  `generateStream(payload: AssembledPromptPayload, onChunk): Promise<UsageMetrics>`,
+  plus `updateConfig`/`resetSession`. `AssembledPromptPayload` carries
+  only the already-assembled per-turn `message`/`context`/`cache`
+  options from the 4-layer pipeline — a provider must not re-derive or
+  reformat that content, just send it.
+- `core/providers/GeminiProvider.ts` — the concrete Gemini implementation
+  (formerly `services/geminiService.ts#DarkNaMoEngine`, moved and
+  renamed, behavior unchanged). Captures `usageMetadata` from the last
+  streamed chunk and returns it as `UsageMetrics` from `generateStream`.
+  `connectLive` (audio) stays a Gemini-specific extra method, not part of
+  `IModelProvider`, since not every provider will support it.
+- `core/providers/LocalFineTunedProvider.ts` — a stub for a future
+  self-hosted OpenAI-compatible endpoint (LM Studio, Ollama, a checkpoint
+  fine-tuned on `DataExporter`'s output). `generateStream` throws until
+  it's actually implemented; do not silently return fake/empty output
+  instead of throwing, since that would hide the provider being
+  unusable.
+- `core/providers/ModelRegistry.ts` — `createProvider(config, systemContext, modelType?)`
+  resolves which `IModelProvider` to instantiate; `getActiveModelType()`/
+  `setActiveModelType()` persist the choice to `localStorage` (guarded
+  try/catch, same pattern as `ABTestManager`/`MemoryRepository`). Instantiated
+  via `useMemo` in `App.tsx`, not a static/global registry — no subsystem
+  in this app should be a hard singleton (see rule below).
+- `App.tsx` calls `IModelProvider.generateStream()` and never imports a
+  concrete provider class directly; adding a new backend means
+  implementing `IModelProvider` and adding a case to `ModelRegistry`, not
+  branching on model type in `App.tsx`.
+
+## 10. Cross-cutting rules for these subsystems
 
 - TypeScript strict mode; explicit interfaces for all inputs/outputs
   (`MemoryRecordProps`, `TokenBudgetConfig`, `IIdentityBlueprint`,
