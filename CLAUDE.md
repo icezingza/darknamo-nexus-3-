@@ -43,6 +43,13 @@ not reintroduce safety-bypass or persona-override modules of that kind.
     `LocalStorageMemoryRepository`, persisting to `localStorage` with
     `flush`/`trim` housekeeping. Keep it swappable — the domain code does
     not care where records are persisted.
+  - `records: MemoryRecord[]` is the actual in-memory store; every
+    read/write method operates on it directly, `localStorage` is only
+    touched by `load()`/`persist()` as a disk-sync layer. Both are
+    wrapped in try/catch — if `localStorage` throws (private browsing,
+    enterprise policy, quota), `storageAvailable` flips to `false` so we
+    stop retrying it, but the session keeps working entirely in-memory
+    for its duration; it just won't survive a page refresh.
 - `findActiveMemories`/`searchActiveMemories` only consider `ACTIVE`
   records and are capped (default 3) so injected context stays bounded —
   this cap is the first line of defense against context overflow, on top
