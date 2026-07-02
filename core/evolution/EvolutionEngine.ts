@@ -4,6 +4,7 @@ import { MoralSignals, MoralTone } from '../Unified_Moral_Layer';
 export interface IEvaluationMetrics {
   toneScore: number;
   conflictLevel: number;
+  cohortId?: string;
 }
 
 const REWARD_DELTA = 0.05;
@@ -18,9 +19,10 @@ const TONE_SCORES: Record<MoralTone, number> = {
   neutral: 0.5
 };
 
-export const deriveEvaluationMetrics = (signals: MoralSignals): IEvaluationMetrics => ({
+export const deriveEvaluationMetrics = (signals: MoralSignals, cohortId?: string): IEvaluationMetrics => ({
   toneScore: TONE_SCORES[signals.tone],
-  conflictLevel: signals.hasRisk ? 1 : signals.tone === 'gentle' ? 0.5 : 0
+  conflictLevel: signals.hasRisk ? 1 : signals.tone === 'gentle' ? 0.5 : 0,
+  cohortId
 });
 
 export class EvolutionEngine {

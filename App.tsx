@@ -13,6 +13,7 @@ import { buildMoralContext, evaluateMoralSignals } from './core/Unified_Moral_La
 import { TokenBudget } from './core/Token_Budget';
 import { EvolutionEngine, deriveEvaluationMetrics } from './core/evolution/EvolutionEngine';
 import { TelemetryService } from './core/monitoring/TelemetryService';
+import { ABTestManager } from './core/testing/ABTestManager';
 import { ElevenLabsService } from './services/ElevenLabsService';
 
 const VoiceWaveform: React.FC<{ isActive: boolean; isProcessing: boolean }> = ({ isActive, isProcessing }) => {
@@ -67,7 +68,9 @@ const App: React.FC = () => {
 
   const memoryStore = useMemo(() => new LocalStorageMemoryRepository(), []);
   const evolutionEngine = useMemo(() => new EvolutionEngine(memoryStore), [memoryStore]);
-  const telemetryService = useMemo(() => new TelemetryService(), []);
+  const abTestManager = useMemo(() => new ABTestManager(), []);
+  const cohort = useMemo(() => abTestManager.getCohort(), [abTestManager]);
+  const telemetryService = useMemo(() => new TelemetryService(cohort), [cohort]);
   const systemContext = useMemo(() => NAMO_IDENTITY.getSystemContext(), []);
   const tokenBudget = useMemo(() => new TokenBudget({
     maxTokens: 8192,
@@ -172,7 +175,7 @@ const App: React.FC = () => {
       Promise.resolve(memoryEnabled ? memoryStore.buildActiveContext(3) : '')
     ]);
 
-    const distilledIdentity = NAMO_IDENTITY.getDistilledContext(moralContext);
+    const distilledIdentity = NAMO_IDENTITY.getDistilledContext(moralContext, cohort);
     const contextBlock = [distilledIdentity, memoryContext].filter(Boolean).join('\n\n');
 
     if (tokenBudgetEnabled) {
@@ -257,9 +260,10 @@ const App: React.FC = () => {
       }
 
       // Fire-and-forget: the evolution loop must not block the UI response thread.
+      const evaluationMetrics = deriveEvaluationMetrics(evaluateMoralSignals(textToSend), cohort);
       evolutionEngine.evaluateInteraction(
         [userMessage.id, modelMessageId],
-        deriveEvaluationMetrics(evaluateMoralSignals(textToSend))
+        evaluationMetrics
       ).then(() => {
         if (autoSaveEnabled) {
           memoryStore.flush();
@@ -268,6 +272,7 @@ const App: React.FC = () => {
           memoryStore.countActiveMemories(),
           memoryStore.countArchivedMemories()
         );
+        telemetryService.recordEvolutionMetrics(evaluationMetrics);
       }).catch(err => {
         console.error('Evolution engine error:', err);
       });
@@ -297,7 +302,8 @@ const App: React.FC = () => {
     messages,
     memoryStore,
     evolutionEngine,
-    telemetryService
+    telemetryService,
+    cohort
   ]);
 
   const handleReplay = async (text: string) => {

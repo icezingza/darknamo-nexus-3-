@@ -2,8 +2,9 @@
 
 ## Scope
 
-This file currently governs six subsystems: **Emotion**, **Memory**,
-**Token Budgeting**, **Identity**, **Evolution**, and **Monitoring**. It reflects what is actually wired
+This file currently governs seven subsystems: **Emotion**, **Memory**,
+**Token Budgeting**, **Identity**, **Evolution**, **Monitoring**, and
+**Experimentation**. It reflects what is actually wired
 into the app (`App.tsx` → `services/geminiService.ts`). The former
 `system_core/` and `scenarios/` directories contained orphaned bypass
 modules (never imported by the live pipeline) and have been removed; do
@@ -77,12 +78,16 @@ not reintroduce safety-bypass or persona-override modules of that kind.
     `systemContext`, set as the Gemini `systemInstruction` at session
     creation. This is the "Load the Identity" step, done once per session
     rather than resent per turn, to keep token usage bounded per rule 3.
-  - `getDistilledContext(currentEmotion)` — a single-line, label-free
-    compression of the same four fields plus the current per-turn
-    emotion/Dharma read (`buildMoralContext`'s output). Called every turn
-    in `App.tsx` and folded into the per-message context block alongside
-    active memories, so the model gets a lightweight persona+mood
-    reminder without repeating the full `getSystemContext()` block.
+  - `getDistilledContext(currentEmotion, cohort)` — a single-line,
+    label-free compression of the same four fields plus the current
+    per-turn emotion/Dharma read (`buildMoralContext`'s output). Called
+    every turn in `App.tsx` and folded into the per-message context block
+    alongside active memories, so the model gets a lightweight
+    persona+mood reminder without repeating the full `getSystemContext()`
+    block. `cohort` (from `ABTestManager`, section 7) trims
+    `cognitiveStyle`/`emotionalPosture` for `'variant'` sessions to test
+    token savings — `purpose` and `ethicalConstraints` are never dropped
+    by a cohort, in either arm.
 - Do not hardcode a new monolithic prompt string anywhere in `App.tsx` or
   `services/*`; persona changes go through `IdentityCapsule`/`IIdentityBlueprint`
   fields.
@@ -153,12 +158,37 @@ not reintroduce safety-bypass or persona-override modules of that kind.
 - Do not make `TelemetryService` a hard global singleton; instantiate it
   like the other services (`useMemo` in `App.tsx`) so it stays injectable
   for tests.
+- `ISessionMetrics`/every emitted log line carries an optional `cohortId`
+  (constructor-injected, see section 7) so `'control'` vs `'variant'`
+  performance can be compared. `IEvaluationMetrics` (section 5) also
+  carries `cohortId` for the same reason — set it at the `App.tsx` call
+  site, not inside `EvolutionEngine` itself.
 
-## 7. Cross-cutting rules for these subsystems
+## 7. Experimentation (A/B testing)
+
+- Live implementation: `core/testing/ABTestManager.ts` (`ABTestManager`)
+  — resolves a session's `Cohort` (`'control' | 'variant'`) once,
+  persisting it to `localStorage` so a returning session stays in the
+  same arm rather than being re-randomized on every load. Assignment is
+  a deterministic hash of `sessionId` when one is supplied, otherwise a
+  coin flip.
+- `App.tsx` reads the cohort once via `useMemo` and threads it into
+  `IdentityCapsule.getDistilledContext` (section 4) and
+  `deriveEvaluationMetrics`/`TelemetryService` (sections 5–6).
+- Rule: any new experimental prompt variant, memory threshold, or policy
+  constant must be gated behind a cohort check via `ABTestManager` —
+  never hardcode a behavior change that silently applies to 100% of
+  sessions when the intent is to A/B test it.
+- `ABTestManager` must stay swappable/testable: no hard global singleton;
+  instantiate via `useMemo` like the other services, and accept
+  `sessionId`/`storageKey` through its constructor rather than reading
+  globals directly.
+
+## 8. Cross-cutting rules for these subsystems
 
 - TypeScript strict mode; explicit interfaces for all inputs/outputs
-  (`MemoryRecordProps`, `TokenBudgetConfig`, `IIdentityBlueprint`, affect
-  vector shape, etc.).
+  (`MemoryRecordProps`, `TokenBudgetConfig`, `IIdentityBlueprint`,
+  `ABTestManagerOptions`, affect vector shape, etc.).
 - Each subsystem must be unit-testable (Jest) with storage/window/LLM
   client injected, not accessed globally.
 - Do not reintroduce `system_core/*`- or `scenarios/*`-style modules
