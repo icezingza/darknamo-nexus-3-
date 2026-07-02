@@ -18,13 +18,16 @@ def analyze_jsonl(file_path):
                 total_lines += 1
                 try:
                     data = json.loads(line)
-                    messages = data.get("messages", [])
-
-                    if not messages:
-                        errors.append(f"บรรทัด {line_num}: ไม่พบอาร์เรย์ 'messages'")
+                    if not isinstance(data, dict):
+                        errors.append(f"บรรทัด {line_num}: โครงสร้างแถวไม่ใช่ JSON Object")
                         continue
 
-                    roles = [msg.get("role") for msg in messages]
+                    messages = data.get("messages")
+                    if not isinstance(messages, list) or not messages:
+                        errors.append(f"บรรทัด {line_num}: ไม่พบอาร์เรย์ 'messages' หรือรูปแบบไม่ถูกต้อง")
+                        continue
+
+                    roles = [msg.get("role") if isinstance(msg, dict) else None for msg in messages]
 
                     # ตรวจสอบว่ามีทั้ง User และ Assistant ครบถ้วนหรือไม่
                     if "user" not in roles or "assistant" not in roles:
@@ -33,7 +36,11 @@ def analyze_jsonl(file_path):
 
                     # เก็บสถิติความยาวของข้อความ
                     for msg in messages:
+                        if not isinstance(msg, dict):
+                            continue
                         content = msg.get("content", "")
+                        if not isinstance(content, str):
+                            content = str(content)
                         if msg.get("role") == "user":
                             user_lengths.append(len(content))
                         elif msg.get("role") == "assistant":
@@ -43,6 +50,8 @@ def analyze_jsonl(file_path):
 
                 except json.JSONDecodeError:
                     errors.append(f"บรรทัด {line_num}: โครงสร้าง JSON ไม่ถูกต้อง (Decode Error)")
+                except Exception as e:
+                    errors.append(f"บรรทัด {line_num}: เกิดข้อผิดพลาดที่ไม่คาดคิด ({type(e).__name__}: {e})")
 
         # --- สรุปผลรายงาน ---
         print("=========================================")
@@ -71,16 +80,21 @@ def analyze_jsonl(file_path):
         # ประเมินความพร้อม
         if valid_records >= 100 and len(errors) == 0:
             print("🚀 สถานะ: ยอดเยี่ยม! ข้อมูลสะอาดและมีปริมาณมากพอสำหรับการ Fine-tune เฟสแรก")
+            return True
         elif valid_records > 0 and len(errors) == 0:
             print("⏳ สถานะ: ข้อมูลสะอาด แต่ปริมาณยังน้อยไปนิด (แนะนำให้เก็บให้ถึง 100 คู่ขึ้นไป)")
+            return True
         else:
             print("🛑 สถานะ: ไม่ผ่าน! กรุณาแก้ไข Error ก่อนนำไปเทรนโมเดล")
+            return False
 
     except FileNotFoundError:
         print(f"❌ Error: ไม่พบไฟล์ชื่อ '{file_path}' กรุณาตรวจสอบชื่อและตำแหน่งไฟล์")
+        return False
 
 if __name__ == "__main__":
     # Usage: python scripts/validate_dataset.py [path/to/dataset.jsonl]
     # Defaults to dataset.jsonl in the current directory if no argument is given.
     file_name = sys.argv[1] if len(sys.argv) > 1 else "dataset.jsonl"
-    analyze_jsonl(file_name)
+    success = analyze_jsonl(file_name)
+    sys.exit(0 if success else 1)
