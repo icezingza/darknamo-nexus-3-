@@ -26,6 +26,17 @@ that kind.
   trust, dominance), computed as a pure function of conversation signals.
   No LLM call, no DOM/network access — this must be unit-testable in
   isolation.
+- Domain layer: `core/emotion/EmotionEngine.ts` implements this as
+  `IAffectVector` (`valence`, `arousal`, `trust`, `passion`, `resonance`,
+  each `0..1`) with pure `updateAffect(state, signals)` /
+  `applyDecay(state)` functions (plus a thin `EmotionEngine` class
+  wrapper). `updateAffect` blends the prior state with the signal-implied
+  target under a 0.7 inertia weight so a single turn can't swing the mood;
+  `applyDecay` relaxes `arousal`/`passion` toward the `0.5` baseline each
+  turn while leaving `trust`/`valence`/`resonance` sticky. It is
+  intentionally **not** wired into `App.tsx` or persistence yet — this is
+  the standalone domain layer, so keep it free of storage/DOM/LLM access
+  when it is eventually integrated.
 - Keep affect *state* separate from prompt *vocabulary*. State is data
   (`{ valence: number, arousal: number, ... }`); how that state phrases a
   reply belongs in the prompt-construction layer, not hardcoded into named
