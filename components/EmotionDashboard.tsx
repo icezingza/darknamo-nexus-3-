@@ -16,6 +16,8 @@ const DIMENSIONS: { key: keyof IAffectVector; label: string }[] = [
 // Pure presentation: renders the affect vector as compact bars. No state,
 // no side effects -- the numeric model lives entirely in core/emotion.
 export const EmotionDashboard: React.FC<EmotionDashboardProps> = ({ affectState }) => {
+  if (!affectState) return null;
+
   return (
     <section>
       <h3 className="text-[10px] font-bold text-zinc-700 uppercase mb-4 mono tracking-widest border-b border-zinc-900 pb-1">Affect_Vector</h3>

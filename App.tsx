@@ -278,8 +278,22 @@ const App: React.FC = () => {
         memoryStore.flush();
       }
 
-      // Fire-and-forget: the evolution loop must not block the UI response thread.
       const evaluationMetrics = deriveEvaluationMetrics(evaluateMoralSignals(textToSend), cohort);
+
+      // Advance the affect vector synchronously (lightweight in-memory op):
+      // it depends only on this turn's metrics, not on the evolution promise
+      // resolving. Doing it here — rather than inside the .then() below —
+      // keeps mood updates in message order and prevents an evaluateInteraction
+      // rejection from freezing the affect state for the rest of the session.
+      // The functional updater folds onto the latest committed vector.
+      setAffectState(prev => emotionEngine.applyDecay(
+        emotionEngine.updateAffect(prev, {
+          toneScore: evaluationMetrics.toneScore,
+          conflictLevel: evaluationMetrics.conflictLevel
+        })
+      ));
+
+      // Fire-and-forget: the evolution loop must not block the UI response thread.
       evolutionEngine.evaluateInteraction(
         [userMessage.id, modelMessageId],
         evaluationMetrics
@@ -292,14 +306,6 @@ const App: React.FC = () => {
           memoryStore.countArchivedMemories()
         );
         telemetryService.recordEvolutionMetrics(evaluationMetrics);
-        // Advance the affect vector off the UI response thread, reusing the
-        // same tone/conflict signals the evolution loop scored this turn on.
-        setAffectState(prev => emotionEngine.applyDecay(
-          emotionEngine.updateAffect(prev, {
-            toneScore: evaluationMetrics.toneScore,
-            conflictLevel: evaluationMetrics.conflictLevel
-          })
-        ));
       }).catch(err => {
         console.error('Evolution engine error:', err);
       });

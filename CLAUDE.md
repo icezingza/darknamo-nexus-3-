@@ -36,14 +36,17 @@ that kind.
   turn while leaving `trust`/`valence`/`resonance` sticky. Keep this layer
   free of storage/DOM/LLM access — it must stay unit-testable in isolation.
 - Wiring: `App.tsx` holds `affectState` in React state (seeded from
-  `emotionEngine.createInitialAffect()`) and advances it inside the
-  Evolution engine's existing deferred `.then()` block (section 5) —
-  reusing that turn's `IEvaluationMetrics` `toneScore`/`conflictLevel`,
-  running `updateAffect` then `applyDecay`, via a functional
-  `setAffectState(prev => …)` updater so the deferred callback never reads
-  a stale vector. `components/EmotionDashboard.tsx` is a pure presentation
-  component that renders the vector as bars; it never computes affect
-  itself.
+  `emotionEngine.createInitialAffect()`) and advances it **synchronously**
+  in `handleSendMessage`, right after this turn's `IEvaluationMetrics` is
+  derived — running `updateAffect` then `applyDecay` on that turn's
+  `toneScore`/`conflictLevel` via a functional `setAffectState(prev => …)`
+  updater. It is intentionally *not* placed in the Evolution engine's
+  deferred `.then()` block (section 5): the affect update depends only on
+  the already-computed metrics, so doing it synchronously keeps mood
+  updates in message order and prevents an `evaluateInteraction` rejection
+  from freezing the affect state. `components/EmotionDashboard.tsx` is a
+  pure presentation component that renders the vector as bars (guarding
+  against a missing vector); it never computes affect itself.
 - Keep affect *state* separate from prompt *vocabulary*. State is data
   (`{ valence: number, arousal: number, ... }`); how that state phrases a
   reply belongs in the prompt-construction layer, not hardcoded into named
