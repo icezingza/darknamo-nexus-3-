@@ -17,6 +17,8 @@ import { TelemetryService } from './core/monitoring/TelemetryService';
 import { ABTestManager } from './core/testing/ABTestManager';
 import { DataExporter } from './core/pipeline/DataExporter';
 import { CognitiveStreamParser } from './core/cognition/StreamParser';
+import { EmotionEngine, IAffectVector } from './core/emotion/EmotionEngine';
+import { EmotionDashboard } from './components/EmotionDashboard';
 import { ElevenLabsService } from './services/ElevenLabsService';
 
 const VoiceWaveform: React.FC<{ isActive: boolean; isProcessing: boolean }> = ({ isActive, isProcessing }) => {
@@ -71,6 +73,8 @@ const App: React.FC = () => {
 
   const memoryStore = useMemo(() => new LocalStorageMemoryRepository(), []);
   const evolutionEngine = useMemo(() => new EvolutionEngine(memoryStore), [memoryStore]);
+  const emotionEngine = useMemo(() => new EmotionEngine(), []);
+  const [affectState, setAffectState] = useState<IAffectVector>(() => emotionEngine.createInitialAffect());
   const abTestManager = useMemo(() => new ABTestManager(), []);
   const cohort = useMemo(() => abTestManager.getCohort(), [abTestManager]);
   const telemetryService = useMemo(() => new TelemetryService(cohort), [cohort]);
@@ -288,6 +292,14 @@ const App: React.FC = () => {
           memoryStore.countArchivedMemories()
         );
         telemetryService.recordEvolutionMetrics(evaluationMetrics);
+        // Advance the affect vector off the UI response thread, reusing the
+        // same tone/conflict signals the evolution loop scored this turn on.
+        setAffectState(prev => emotionEngine.applyDecay(
+          emotionEngine.updateAffect(prev, {
+            toneScore: evaluationMetrics.toneScore,
+            conflictLevel: evaluationMetrics.conflictLevel
+          })
+        ));
       }).catch(err => {
         console.error('Evolution engine error:', err);
       });
@@ -317,6 +329,7 @@ const App: React.FC = () => {
     messages,
     memoryStore,
     evolutionEngine,
+    emotionEngine,
     telemetryService,
     cohort
   ]);
@@ -416,6 +429,8 @@ const App: React.FC = () => {
               </div>
             </div>
           </section>
+
+          <EmotionDashboard affectState={affectState} />
 
           <section>
             <h3 className="text-[10px] font-bold text-zinc-700 uppercase mb-4 mono tracking-widest border-b border-zinc-900 pb-1">Guidance_Commands</h3>

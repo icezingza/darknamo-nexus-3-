@@ -33,10 +33,17 @@ that kind.
   wrapper). `updateAffect` blends the prior state with the signal-implied
   target under a 0.7 inertia weight so a single turn can't swing the mood;
   `applyDecay` relaxes `arousal`/`passion` toward the `0.5` baseline each
-  turn while leaving `trust`/`valence`/`resonance` sticky. It is
-  intentionally **not** wired into `App.tsx` or persistence yet — this is
-  the standalone domain layer, so keep it free of storage/DOM/LLM access
-  when it is eventually integrated.
+  turn while leaving `trust`/`valence`/`resonance` sticky. Keep this layer
+  free of storage/DOM/LLM access — it must stay unit-testable in isolation.
+- Wiring: `App.tsx` holds `affectState` in React state (seeded from
+  `emotionEngine.createInitialAffect()`) and advances it inside the
+  Evolution engine's existing deferred `.then()` block (section 5) —
+  reusing that turn's `IEvaluationMetrics` `toneScore`/`conflictLevel`,
+  running `updateAffect` then `applyDecay`, via a functional
+  `setAffectState(prev => …)` updater so the deferred callback never reads
+  a stale vector. `components/EmotionDashboard.tsx` is a pure presentation
+  component that renders the vector as bars; it never computes affect
+  itself.
 - Keep affect *state* separate from prompt *vocabulary*. State is data
   (`{ valence: number, arousal: number, ... }`); how that state phrases a
   reply belongs in the prompt-construction layer, not hardcoded into named
