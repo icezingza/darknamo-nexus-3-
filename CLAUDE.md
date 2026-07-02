@@ -2,10 +2,11 @@
 
 ## Scope
 
-This file currently governs nine subsystems: **Emotion**, **Memory**,
+This file currently governs ten subsystems: **Emotion**, **Memory**,
 **Token Budgeting**, **Identity**, **Evolution**, **Monitoring**,
-**Experimentation**, **Data Export**, and **Model Providers**. It reflects
-what is actually wired into the app (`App.tsx` → `core/providers/`). The
+**Experimentation**, **Data Export**, **Model Providers**, and
+**Cognition**. It reflects what is actually wired into the app
+(`App.tsx` → `core/providers/`). The
 former `system_core/` and `scenarios/` directories contained orphaned
 bypass modules (never imported by the live pipeline) and have been
 removed; do not reintroduce safety-bypass or persona-override modules of
@@ -252,7 +253,38 @@ that kind.
   implementing `IModelProvider` and adding a case to `ModelRegistry`, not
   branching on model type in `App.tsx`.
 
-## 10. Cross-cutting rules for these subsystems
+## 10. Cognition (cognitive monologue)
+
+- The model is instructed (via `NamoIdentity`'s `cognitiveStyle`, section
+  4) to prefix every reply with a single
+  `<cognitive_stream><impulse>…</impulse><reflection>…</reflection><conflict>…</conflict></cognitive_stream>`
+  block before its user-facing text — an internal Impulse → Reflection →
+  Conflict pass. This is a persona instruction, not a guaranteed
+  contract: the parser must tolerate the block being absent, malformed,
+  or truncated.
+- Live implementation: `core/cognition/StreamParser.ts`
+  (`CognitiveStreamParser`) — an incremental, stateful parser fed one
+  provider chunk at a time via `processChunk`, returning
+  `{ visibleText, cognitiveStream? }`. It strips a leading
+  `<cognitive_stream>…</cognitive_stream>` block so it never reaches the
+  chat UI, buffering only the minimum needed to resolve tag boundaries
+  (open/close tags can split across chunks) and switching to zero-buffer
+  passthrough the moment the real reply starts. `flushRemaining()` is
+  called once the stream ends: unresolved detection buffer surfaces as
+  visible text (it was ordinary text resembling a tag prefix); an opened
+  but never-closed block surfaces its partial capture as `cognitiveStream`
+  (never as chat text), so a truncated reply can't leak raw tags.
+- No LLM/DOM/network/storage access in the parser — pure string state
+  machine, unit-testable in isolation.
+- `App.tsx` builds a fresh `CognitiveStreamParser` per turn, feeds every
+  provider chunk through it, appends only `visibleText` to the chat
+  bubble, records Time-To-Interact on the first *visible* chunk (not the
+  first raw token, which may be inside the hidden block), and forwards any
+  `cognitiveStream` to `TelemetryService.recordCognitiveStream` (section
+  6) for developer/safety observability. The monologue is never persisted
+  to memory or shown to the user.
+
+## 11. Cross-cutting rules for these subsystems
 
 - TypeScript strict mode; explicit interfaces for all inputs/outputs
   (`MemoryRecordProps`, `TokenBudgetConfig`, `IIdentityBlueprint`,

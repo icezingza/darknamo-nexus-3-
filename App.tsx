@@ -16,6 +16,7 @@ import { EvolutionEngine, deriveEvaluationMetrics } from './core/evolution/Evolu
 import { TelemetryService } from './core/monitoring/TelemetryService';
 import { ABTestManager } from './core/testing/ABTestManager';
 import { DataExporter } from './core/pipeline/DataExporter';
+import { CognitiveStreamParser } from './core/cognition/StreamParser';
 import { ElevenLabsService } from './services/ElevenLabsService';
 
 const VoiceWaveform: React.FC<{ isActive: boolean; isProcessing: boolean }> = ({ isActive, isProcessing }) => {
@@ -223,6 +224,23 @@ const App: React.FC = () => {
 
     let fullResponse = '';
     let ttiRecorded = false;
+    const streamParser = new CognitiveStreamParser();
+
+    const applyParsed = (result: { visibleText: string; cognitiveStream?: string }) => {
+      if (result.cognitiveStream) {
+        telemetryService.recordCognitiveStream(result.cognitiveStream);
+      }
+      if (!result.visibleText) return;
+      if (!ttiRecorded) {
+        ttiRecorded = true;
+        telemetryService.recordLatency(Date.now() - sendStartedAt);
+      }
+      fullResponse += result.visibleText;
+      setMessages(prev => prev.map(m =>
+        m.id === modelMessageId ? { ...m, text: fullResponse } : m
+      ));
+    };
+
     try {
       const usage = await engine.generateStream(
         {
@@ -233,17 +251,9 @@ const App: React.FC = () => {
             ttlMs: 300000
           }
         },
-        chunk => {
-          if (!ttiRecorded) {
-            ttiRecorded = true;
-            telemetryService.recordLatency(Date.now() - sendStartedAt);
-          }
-          fullResponse += chunk;
-          setMessages(prev => prev.map(m =>
-            m.id === modelMessageId ? { ...m, text: fullResponse } : m
-          ));
-        }
+        chunk => applyParsed(streamParser.processChunk(chunk))
       );
+      applyParsed(streamParser.flushRemaining());
       if (usage.totalTokenCount) {
         telemetryService.recordTokenUsage(usage.totalTokenCount);
       }
