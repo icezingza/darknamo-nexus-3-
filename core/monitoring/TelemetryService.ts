@@ -43,6 +43,10 @@ export class TelemetryService {
     this.emit('data_export', { exampleCount });
   }
 
+  recordCognitiveStream(content: string): void {
+    this.emit('cognitive_stream', { content });
+  }
+
   getSnapshot(): ISessionMetrics {
     return {
       totalTokensUsed: this.totalTokensUsed,
