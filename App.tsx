@@ -373,19 +373,27 @@ const App: React.FC = () => {
     cohort
   ]);
 
-  const handleExportTrainingData = () => {
-    const jsonl = dataExporter.exportToJsonl();
-    const blob = new Blob([jsonl], { type: 'application/jsonl' });
+  const downloadBlob = (contents: string, filename: string, mime: string) => {
+    const blob = new Blob([contents], { type: mime });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `namo-training-data-${Date.now()}.jsonl`;
+    link.download = filename;
     document.body.appendChild(link);
     link.click();
     setTimeout(() => {
       URL.revokeObjectURL(url);
       link.remove();
     }, 100);
+  };
+
+  const handleExportTrainingData = () => {
+    const stamp = Date.now();
+    const jsonl = dataExporter.exportToJsonl();
+    downloadBlob(jsonl, `namo-training-data-${stamp}.jsonl`, 'application/jsonl');
+    // Metadata companion: real high-value/golden counts for the same export.
+    const summaryJson = dataExporter.buildPitchSummaryJson();
+    downloadBlob(summaryJson, `pitch_summary-${stamp}.json`, 'application/json');
   };
 
   const handleReplay = async (text: string) => {

@@ -180,10 +180,27 @@ that kind.
 
 - Live implementation: `core/monitoring/TelemetryService.ts`
   (`TelemetryService`) — tracks `ISessionMetrics` (`totalTokensUsed`,
-  `averageLatencyMs`, `activeMemoryCount`, `archivedMemoryCount`) and
-  exposes `recordTokenUsage`, `recordLatency`, `recordMemoryDistribution`,
-  and `getSnapshot()`. No constructor dependencies — plain in-memory
-  counters, unit-testable in isolation.
+  `averageLatencyMs`, `activeMemoryCount`, `archivedMemoryCount`, plus the
+  observed aggregates `interactionCount`, `conflictCount`, `conflictRate`,
+  `averageToneScore`, `averageTokensPerInteraction`) and exposes
+  `recordTokenUsage`, `recordLatency`, `recordMemoryDistribution`,
+  `recordEvolutionMetrics`, and `getSnapshot()`. No constructor
+  dependencies — plain in-memory counters, unit-testable in isolation.
+- The tone/conflict aggregates are folded in by `recordEvolutionMetrics`
+  from the per-turn `toneScore`/`conflictLevel` the Evolution engine
+  already emits (guarded by `typeof === 'number'` so an unrelated payload
+  can't poison the running averages with `NaN`). Conflict is counted at
+  the same `>= 0.5` threshold the Evolution engine penalizes at, so the
+  observed rate lines up with live reward/penalty behavior. These are
+  *observed session counters* — there is no stored baseline, so nothing
+  here is a projected or baseline-relative "reduction."
+- `scripts/generatePitchReport.ts` is a pure formatter over a
+  `getSnapshot()` result (+ optional `DataExporter.buildPitchSummary()`):
+  it only copies/derives from real counters, labels the report
+  session-scoped, and reports zeros (never a synthesized figure) when no
+  interactions were recorded. Do not add fabricated baselines or
+  projected-improvement claims to it — session telemetry must not be
+  dressed up as aggregate validated production metrics.
 - Every `record*` call synchronously updates the in-memory counters, then
   defers the actual log line via `queueMicrotask` wrapped in try/catch
   (`emit`), so a future swap from `console.log` to a real network sink
