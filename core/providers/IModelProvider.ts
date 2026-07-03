@@ -23,6 +23,7 @@ export interface UsageMetrics {
 
 export interface IModelProvider {
   generateStream(payload: AssembledPromptPayload, onChunk: (chunk: string) => void): Promise<UsageMetrics>;
+  generateEmbedding(text: string): Promise<number[]>;
   updateConfig(config: EngineConfig): void;
   resetSession(): void;
 }

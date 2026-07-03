@@ -2,6 +2,8 @@ import { GoogleGenAI, GenerateContentResponse, Chat, Modality } from "@google/ge
 import { EngineConfig } from "../../types";
 import { AssembledPromptPayload, IModelProvider, UsageMetrics } from "./IModelProvider";
 
+const EMBEDDING_MODEL = 'text-embedding-004';
+
 export class GeminiProvider implements IModelProvider {
   private ai: GoogleGenAI;
   private chat: Chat | null = null;
@@ -102,6 +104,16 @@ export class GeminiProvider implements IModelProvider {
       onChunk("⚠️ Engine Failure: connection to singularity lost.");
       return {};
     }
+  }
+
+  public async generateEmbedding(text: string): Promise<number[]> {
+    const trimmed = text.trim();
+    if (!trimmed) return [];
+    const response = await this.ai.models.embedContent({
+      model: EMBEDDING_MODEL,
+      contents: trimmed
+    });
+    return response.embeddings?.[0]?.values ?? [];
   }
 
   // Live API Connection -- audio-specific, not part of the abstracted

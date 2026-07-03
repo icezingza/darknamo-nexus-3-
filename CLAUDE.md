@@ -57,10 +57,15 @@ that kind.
 - Live implementation:
   - Domain layer: `core/domain/MemoryRecord.ts` — `MemoryRecord` (fields:
     `id`, `content`, `state: 'ACTIVE' | 'ARCHIVED' | 'FORGOTTEN'`,
-    `emotionWeight`, `timestamp`, `lastAccessed`) with lifecycle methods
-    `archive()`, `forget()`, `recordAccess()`, plus the pure
-    `searchMemoryRecords` Jaccard-similarity ranking function. No
-    `window`/`localStorage` import here.
+    `emotionWeight`, `timestamp`, `lastAccessed`, optional
+    `embedding?: number[]`) with lifecycle methods `archive()`,
+    `forget()`, `recordAccess()`, plus two pure ranking functions:
+    `searchMemoryRecords` (lexical Jaccard) and `searchSemanticMemories`
+    (cosine similarity over `embedding`, via the pure
+    `calculateCosineSimilarity`, restricted to ACTIVE + embedded records).
+    The math stays here — **no** LLM/API call in the domain layer; the
+    embedding *vectors* are computed by the provider (section 9) and
+    passed in. No `window`/`localStorage` import here.
   - Infrastructure layer: `services/MemoryRepository.ts` —
     `MemoryRepository` interface implemented by
     `LocalStorageMemoryRepository`, persisting to `localStorage` with
@@ -77,6 +82,17 @@ that kind.
   records and are capped (default 3) so injected context stays bounded —
   this cap is the first line of defense against context overflow, on top
   of the `TokenBudget` gate in section 3.
+- Semantic retrieval: `App.tsx` embeds the user's query once per turn (via
+  `IModelProvider.generateEmbedding`, section 9) and calls
+  `MemoryRepository.buildSemanticContext(queryEmbedding, 3)`
+  (→ `searchSemanticActiveMemories` → domain `searchSemanticMemories`).
+  The same query vector is reused as the stored `embedding` of the saved
+  user memory; the model response is embedded before its own save.
+  Embedding is best-effort: `App.tsx`'s `safeEmbed` swallows failures and
+  returns `undefined`, so a failed embed falls back to recency
+  (`buildActiveContext`) for retrieval and saves the record with no
+  vector (searchable lexically, just not semantically). The Jaccard path
+  is retained, not removed.
 - `ARCHIVED` items are excluded from active search by default (reachable
   only via `searchArchivedMemories`); `FORGOTTEN` items are dropped from
   persistence entirely on the next `flush()`.
@@ -247,22 +263,28 @@ that kind.
 - Live implementation: `core/providers/IModelProvider.ts` defines the
   interface every LLM backend must satisfy —
   `generateStream(payload: AssembledPromptPayload, onChunk): Promise<UsageMetrics>`,
-  plus `updateConfig`/`resetSession`. `AssembledPromptPayload` carries
+  `generateEmbedding(text): Promise<number[]>`, plus
+  `updateConfig`/`resetSession`. `AssembledPromptPayload` carries
   only the already-assembled per-turn `message`/`context`/`cache`
   options from the 4-layer pipeline — a provider must not re-derive or
-  reformat that content, just send it.
+  reformat that content, just send it. `generateEmbedding` is where all
+  vector computation lives — the domain layer (section 2) only does the
+  cosine math on vectors the provider returns.
 - `core/providers/GeminiProvider.ts` — the concrete Gemini implementation
   (formerly `services/geminiService.ts#DarkNaMoEngine`, moved and
   renamed, behavior unchanged). Captures `usageMetadata` from the last
   streamed chunk and returns it as `UsageMetrics` from `generateStream`.
-  `connectLive` (audio) stays a Gemini-specific extra method, not part of
-  `IModelProvider`, since not every provider will support it.
+  `generateEmbedding` calls `ai.models.embedContent` with
+  `text-embedding-004` and returns `embeddings[0].values` (empty array
+  for empty input). `connectLive` (audio) stays a Gemini-specific extra
+  method, not part of `IModelProvider`, since not every provider will
+  support it.
 - `core/providers/LocalFineTunedProvider.ts` — a stub for a future
   self-hosted OpenAI-compatible endpoint (LM Studio, Ollama, a checkpoint
-  fine-tuned on `DataExporter`'s output). `generateStream` throws until
-  it's actually implemented; do not silently return fake/empty output
-  instead of throwing, since that would hide the provider being
-  unusable.
+  fine-tuned on `DataExporter`'s output). `generateStream` and
+  `generateEmbedding` both throw until actually implemented; do not
+  silently return fake/empty output instead of throwing, since that would
+  hide the provider being unusable.
 - `core/providers/ModelRegistry.ts` — `createProvider(config, systemContext, modelType?)`
   resolves which `IModelProvider` to instantiate; `getActiveModelType()`/
   `setActiveModelType()` persist the choice to `localStorage` (guarded

@@ -179,10 +179,27 @@ const App: React.FC = () => {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
 
-    const [moralContext, memoryContext] = await Promise.all([
-      Promise.resolve(buildMoralContext(textToSend)),
-      Promise.resolve(memoryEnabled ? memoryStore.buildActiveContext(3) : '')
-    ]);
+    // Embedding calls hit the provider and can fail; never let that break the
+    // turn. Returns undefined on error/empty so callers fall back cleanly.
+    const safeEmbed = async (text: string): Promise<number[] | undefined> => {
+      if (!engine) return undefined;
+      try {
+        const vector = await engine.generateEmbedding(text);
+        return vector.length > 0 ? vector : undefined;
+      } catch (err) {
+        console.error('Embedding generation failed:', err);
+        return undefined;
+      }
+    };
+
+    // Reused for both semantic retrieval and the user memory's stored vector.
+    const queryEmbedding = memoryEnabled ? await safeEmbed(textToSend) : undefined;
+    const moralContext = buildMoralContext(textToSend);
+    const memoryContext = !memoryEnabled
+      ? ''
+      : queryEmbedding
+        ? memoryStore.buildSemanticContext(queryEmbedding, 3)
+        : memoryStore.buildActiveContext(3); // fall back to recency if embedding unavailable
 
     const distilledIdentity = NAMO_IDENTITY.getDistilledContext(moralContext, cohort);
     const contextBlock = [distilledIdentity, memoryContext].filter(Boolean).join('\n\n');
@@ -222,7 +239,8 @@ const App: React.FC = () => {
         id: userMessage.id,
         content: `(user) ${textToSend}`,
         emotionWeight: 0.5,
-        timestamp: userMessage.timestamp.getTime()
+        timestamp: userMessage.timestamp.getTime(),
+        embedding: queryEmbedding
       }));
     }
 
@@ -268,11 +286,13 @@ const App: React.FC = () => {
     }
 
     if (memoryEnabled && fullResponse) {
+      const responseEmbedding = await safeEmbed(fullResponse);
       memoryStore.save(new MemoryRecord({
         id: modelMessageId,
         content: `(model) ${fullResponse}`,
         emotionWeight: 0.5,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        embedding: responseEmbedding
       }));
       if (autoSaveEnabled) {
         memoryStore.flush();
