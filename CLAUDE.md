@@ -194,13 +194,26 @@ that kind.
   observed rate lines up with live reward/penalty behavior. These are
   *observed session counters* — there is no stored baseline, so nothing
   here is a projected or baseline-relative "reduction."
+- The conflict-rate *reduction* is a genuinely measured within-session
+  before/after, not a projection: the first `BASELINE_INTERACTION_THRESHOLD`
+  (10) turns freeze a baseline conflict rate, and turns recorded *after*
+  that accrue to a **disjoint** "after" window. `getSnapshot()` exposes
+  `baselineConflictRate` (null until the threshold is reached) and
+  `postBaselineConflictRate` (null until ≥1 turn lands after it). The two
+  windows never overlap, so a reported reduction compares real measured
+  windows rather than a diluted cumulative-vs-cumulative figure.
 - `scripts/generatePitchReport.ts` is a pure formatter over a
   `getSnapshot()` result (+ optional `DataExporter.buildPitchSummary()`):
   it only copies/derives from real counters, labels the report
   session-scoped, and reports zeros (never a synthesized figure) when no
-  interactions were recorded. Do not add fabricated baselines or
-  projected-improvement claims to it — session telemetry must not be
-  dressed up as aggregate validated production metrics.
+  interactions were recorded. Its `conflictReduction` returns a null
+  `reductionPct` with an explanatory `note` — never a fabricated stand-in
+  — whenever a real comparison is impossible (too few baseline turns, no
+  turns yet after the baseline, or a zero baseline with nothing to reduce
+  against), and reports a signed percentage honestly when conflict *rose*.
+  Do not add projected-improvement claims or a stored baseline that a
+  session didn't actually measure — session telemetry must not be dressed
+  up as aggregate validated production metrics.
 - Every `record*` call synchronously updates the in-memory counters, then
   defers the actual log line via `queueMicrotask` wrapped in try/catch
   (`emit`), so a future swap from `console.log` to a real network sink

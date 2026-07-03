@@ -28,10 +28,20 @@ export interface PitchReport {
     averageTokensPerInteraction: number;
   };
   emotionalAlignment: {
-    // Observed, not "reduced from a baseline" -- there is no baseline stored.
     observedConflictRate: number;
     conflictInteractions: number;
     averageToneScore: number;
+  };
+  // Measured within-session before/after: the first-N-turn baseline window
+  // vs the disjoint window of turns recorded after it. reductionPct is null
+  // (with an explanatory note) whenever a genuine comparison isn't possible,
+  // never a fabricated stand-in.
+  conflictReduction: {
+    status: 'ok' | 'insufficient_data' | 'no_baseline_conflict';
+    baselineConflictRate: number | null;
+    recentConflictRate: number | null;
+    reductionPct: number | null;
+    note: string;
   };
   dataset?: {
     goldenExampleCount: number;
@@ -43,8 +53,47 @@ export interface PitchReport {
 
 const SCOPE = 'single live session (observed telemetry)';
 const DISCLAIMER =
-  'All figures are observed counters from one live session. They are NOT aggregate, ' +
-  'benchmarked, or validated production metrics, and contain no projected or baseline-relative claims.';
+  'All figures are observed counters from one live session, including the conflict-rate ' +
+  'reduction, which is a measured within-session comparison of two disjoint windows -- not ' +
+  'a projection. They are NOT aggregate, benchmarked, or validated production metrics.';
+
+// Genuine before/after from the two disjoint measured windows. Returns a null
+// reductionPct with an explanatory note (never a fabricated number) when a
+// real comparison can't be made: too few turns for a baseline, no turns yet
+// after the baseline, or a zero baseline (nothing to reduce against).
+const buildConflictReduction = (snapshot: ISessionMetrics): PitchReport['conflictReduction'] => {
+  const { baselineConflictRate, postBaselineConflictRate, postBaselineInteractionCount, baselineInteractionThreshold } = snapshot;
+
+  if (baselineConflictRate === null || postBaselineInteractionCount === 0 || postBaselineConflictRate === null) {
+    return {
+      status: 'insufficient_data',
+      baselineConflictRate,
+      recentConflictRate: postBaselineConflictRate,
+      reductionPct: null,
+      note: `Insufficient data for baseline comparison: need ${baselineInteractionThreshold}+ baseline turns and at least one turn after the baseline.`
+    };
+  }
+
+  if (baselineConflictRate === 0) {
+    return {
+      status: 'no_baseline_conflict',
+      baselineConflictRate,
+      recentConflictRate: postBaselineConflictRate,
+      reductionPct: null,
+      note: 'Baseline conflict rate was 0 -- there is nothing to reduce against; rates reported as-is.'
+    };
+  }
+
+  // Signed on purpose: a negative value (conflict rose) is reported honestly.
+  const reductionPct = ((baselineConflictRate - postBaselineConflictRate) / baselineConflictRate) * 100;
+  return {
+    status: 'ok',
+    baselineConflictRate,
+    recentConflictRate: postBaselineConflictRate,
+    reductionPct,
+    note: `Measured: first-${baselineInteractionThreshold}-turn baseline vs the disjoint window of later turns (same session).`
+  };
+};
 
 // Pure: snapshot in, report out. Injectable for tests and callable from either
 // the UI (live snapshot) or a Node context (snapshot loaded from a file).
@@ -70,7 +119,8 @@ export const generatePitchReport = (
       observedConflictRate: snapshot.conflictRate,
       conflictInteractions: snapshot.conflictCount,
       averageToneScore: snapshot.averageToneScore
-    }
+    },
+    conflictReduction: buildConflictReduction(snapshot)
   };
 
   if (summary) {
@@ -116,6 +166,18 @@ export const formatPitchReport = (report: PitchReport): string => {
   lines.push(`- Observed conflict rate: ${pct(report.emotionalAlignment.observedConflictRate)} ` +
     `(${report.emotionalAlignment.conflictInteractions}/${report.responsiveness.sampleCount} turns)`);
   lines.push(`- Average tone score: ${report.emotionalAlignment.averageToneScore.toFixed(3)}`);
+
+  const cr = report.conflictReduction;
+  lines.push('');
+  lines.push('### Conflict Rate Reduction (measured, within-session)');
+  if (cr.status === 'ok' && cr.reductionPct !== null) {
+    const verb = cr.reductionPct >= 0 ? 'reduction' : 'increase';
+    lines.push(`- Baseline conflict rate: ${pct(cr.baselineConflictRate as number)}`);
+    lines.push(`- Recent conflict rate: ${pct(cr.recentConflictRate as number)}`);
+    lines.push(`- Measured ${verb}: ${Math.abs(cr.reductionPct).toFixed(1)}%`);
+  } else {
+    lines.push(`- ${cr.note}`);
+  }
 
   if (report.dataset) {
     lines.push('');
