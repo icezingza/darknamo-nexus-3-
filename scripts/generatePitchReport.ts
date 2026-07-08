@@ -230,8 +230,11 @@ export const aggregateSessions = (history: ISessionMetrics[]): ISessionMetrics =
     if (s.cohortId) cohorts.add(s.cohortId);
 
     if (s.baselineConflictRate !== null) {
-      baselineTurns += threshold;
-      baselineConflicts += Math.round(s.baselineConflictRate * threshold);
+      // Use each session's own baseline window size, not a global one, so the
+      // reconstruction stays exact even if sessions ran different thresholds.
+      const sThreshold = s.baselineInteractionThreshold || 10;
+      baselineTurns += sThreshold;
+      baselineConflicts += Math.round(s.baselineConflictRate * sThreshold);
       if (s.postBaselineInteractionCount > 0 && s.postBaselineConflictRate !== null) {
         afterTurns += s.postBaselineInteractionCount;
         afterConflicts += Math.round(s.postBaselineConflictRate * s.postBaselineInteractionCount);

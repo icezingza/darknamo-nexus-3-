@@ -82,6 +82,9 @@ const App: React.FC = () => {
   const cohort = useMemo(() => abTestManager.getCohort(), [abTestManager]);
   const telemetryService = useMemo(() => new TelemetryService(cohort), [cohort]);
   const telemetrySessionStore = useMemo(() => new LocalStorageTelemetrySessionStore(), []);
+  // Stable id for this app lifecycle so repeated exports overwrite this
+  // session's telemetry entry instead of duplicating it in the history.
+  const sessionId = useMemo(() => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`, []);
   const dataExporter = useMemo(() => new DataExporter(memoryStore, telemetryService), [memoryStore, telemetryService]);
   const modelRegistry = useMemo(() => new ModelRegistry(), []);
   const systemContext = useMemo(() => NAMO_IDENTITY.getSystemContext(), []);
@@ -399,7 +402,7 @@ const App: React.FC = () => {
     // Capture this session's observed metrics and download the full persisted
     // history, so a genuine cross-session pitch report can be generated offline
     // (feed this file to generateAggregatePitchReport in scripts/generatePitchReport).
-    telemetrySessionStore.append(telemetryService.getSnapshot());
+    telemetrySessionStore.append(telemetryService.getSnapshot(), sessionId);
     downloadBlob(telemetrySessionStore.exportHistoryJson(), `telemetry_history-${stamp}.json`, 'application/json');
   };
 

@@ -4,10 +4,14 @@ const STORAGE_KEY = 'namo_telemetry_history_v1';
 const MAX_SESSIONS = 200;
 
 // A completed session's snapshot plus when it was captured, so a cross-session
-// pitch report can order and label sessions.
+// pitch report can order and label sessions. `sessionId` (when supplied) keys
+// deduplication: re-exporting within the same app lifecycle overwrites that
+// session's entry instead of appending a duplicate that would double-count in
+// the aggregate.
 export interface PersistedSession {
   capturedAt: number;
   metrics: ISessionMetrics;
+  sessionId?: string;
 }
 
 // Persists ISessionMetrics history across browser sessions so a genuine,
@@ -15,7 +19,7 @@ export interface PersistedSession {
 // separate adapter (not folded into TelemetryService) so the telemetry core
 // stays a pure, dependency-free, unit-testable counter per CLAUDE.md section 6.
 export interface TelemetrySessionStore {
-  append(metrics: ISessionMetrics): void;
+  append(metrics: ISessionMetrics, sessionId?: string): void;
   loadHistory(): PersistedSession[];
   exportHistoryJson(): string;
   clear(): void;
@@ -34,8 +38,20 @@ export class LocalStorageTelemetrySessionStore implements TelemetrySessionStore 
     this.history = this.load();
   }
 
-  append(metrics: ISessionMetrics): void {
-    this.history.push({ capturedAt: Date.now(), metrics });
+  append(metrics: ISessionMetrics, sessionId?: string): void {
+    const entry: PersistedSession = { capturedAt: Date.now(), metrics, sessionId };
+    // Dedup: re-exporting the same live session overwrites its (now more
+    // complete) snapshot rather than appending a duplicate that would
+    // double-count interactions/conflicts in the cross-session aggregate.
+    if (sessionId) {
+      const existingIndex = this.history.findIndex(s => s.sessionId === sessionId);
+      if (existingIndex !== -1) {
+        this.history[existingIndex] = entry;
+        this.persist();
+        return;
+      }
+    }
+    this.history.push(entry);
     if (this.history.length > MAX_SESSIONS) {
       this.history = this.history.slice(-MAX_SESSIONS);
     }
