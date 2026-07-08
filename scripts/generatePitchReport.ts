@@ -53,9 +53,9 @@ export interface PitchReport {
 
 const SCOPE = 'single live session (observed telemetry)';
 const DISCLAIMER =
-  'All figures are observed counters from one live session, including the conflict-rate ' +
-  'reduction, which is a measured within-session comparison of two disjoint windows -- not ' +
-  'a projection. They are NOT aggregate, benchmarked, or validated production metrics.';
+  'All figures are observed counters from live session telemetry (see scope above for how many ' +
+  'sessions), including the conflict-rate reduction, which is a measured comparison of two ' +
+  'disjoint windows -- not a projection. They are NOT benchmarked or validated production metrics.';
 
 // Genuine before/after from the two disjoint measured windows. Returns a null
 // reductionPct with an explanatory note (never a fabricated number) when a
