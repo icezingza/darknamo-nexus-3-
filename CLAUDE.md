@@ -214,6 +214,20 @@ that kind.
   Do not add projected-improvement claims or a stored baseline that a
   session didn't actually measure — session telemetry must not be dressed
   up as aggregate validated production metrics.
+- Cross-session persistence lives in a *separate* adapter,
+  `services/TelemetrySessionStore.ts` (`LocalStorageTelemetrySessionStore`),
+  not in `TelemetryService` — the telemetry core stays a pure,
+  dependency-free counter (this section's first rule). The adapter appends
+  each session's `getSnapshot()` to a `localStorage` array under the same
+  guarded try/catch pattern as `MemoryRepository`/`ABTestManager`, and
+  `App.tsx` captures + downloads the history on export.
+  `generatePitchReport.ts`'s `aggregateSessions`/`generateAggregatePitchReport`
+  pool that history honestly: additive counters summed, rates weighted by
+  interaction count, and the conflict baseline/after windows reconstructed
+  from each session's stored rates and *re-divided* (a pooled before/after,
+  not an average-of-rates). A session that never reached its baseline
+  contributes nothing to the baseline windows — same rule as within one
+  session, so the aggregate can't invent a comparison either.
 - Every `record*` call synchronously updates the in-memory counters, then
   defers the actual log line via `queueMicrotask` wrapped in try/catch
   (`emit`), so a future swap from `console.log` to a real network sink
@@ -363,7 +377,12 @@ that kind.
   (`MemoryRecordProps`, `TokenBudgetConfig`, `IIdentityBlueprint`,
   `ABTestManagerOptions`, affect vector shape, etc.).
 - Each subsystem must be unit-testable (Jest) with storage/window/LLM
-  client injected, not accessed globally.
+  client injected, not accessed globally. The suite lives in `tests/`
+  (`jest.config.cjs` + `tsconfig.jest.json` so ts-jest sidesteps the base
+  config's `bundler`/`noEmit` settings); `npm test` runs it fully offline
+  (no network, no real LLM). `.github/workflows/ci.yml` gates `main` by
+  running `npm run typecheck` + `npm test` on every push/PR. Add a test
+  alongside new pure logic rather than leaving it uncovered.
 - Do not reintroduce `system_core/*`- or `scenarios/*`-style modules
   (safety-bypass instructions, persona overrides that forbid AI
   self-disclosure, etc.) into `core/*` or anywhere else in the live

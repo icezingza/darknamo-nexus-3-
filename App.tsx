@@ -15,6 +15,7 @@ import { buildMoralContext, evaluateMoralSignals } from './core/Unified_Moral_La
 import { TokenBudget } from './core/Token_Budget';
 import { EvolutionEngine, deriveEvaluationMetrics } from './core/evolution/EvolutionEngine';
 import { TelemetryService } from './core/monitoring/TelemetryService';
+import { LocalStorageTelemetrySessionStore } from './services/TelemetrySessionStore';
 import { ABTestManager } from './core/testing/ABTestManager';
 import { DataExporter } from './core/pipeline/DataExporter';
 import { CognitiveStreamParser } from './core/cognition/StreamParser';
@@ -80,6 +81,7 @@ const App: React.FC = () => {
   const abTestManager = useMemo(() => new ABTestManager(), []);
   const cohort = useMemo(() => abTestManager.getCohort(), [abTestManager]);
   const telemetryService = useMemo(() => new TelemetryService(cohort), [cohort]);
+  const telemetrySessionStore = useMemo(() => new LocalStorageTelemetrySessionStore(), []);
   const dataExporter = useMemo(() => new DataExporter(memoryStore, telemetryService), [memoryStore, telemetryService]);
   const modelRegistry = useMemo(() => new ModelRegistry(), []);
   const systemContext = useMemo(() => NAMO_IDENTITY.getSystemContext(), []);
@@ -394,6 +396,11 @@ const App: React.FC = () => {
     // Metadata companion: real high-value/golden counts for the same export.
     const summaryJson = dataExporter.buildPitchSummaryJson();
     downloadBlob(summaryJson, `pitch_summary-${stamp}.json`, 'application/json');
+    // Capture this session's observed metrics and download the full persisted
+    // history, so a genuine cross-session pitch report can be generated offline
+    // (feed this file to generateAggregatePitchReport in scripts/generatePitchReport).
+    telemetrySessionStore.append(telemetryService.getSnapshot());
+    downloadBlob(telemetrySessionStore.exportHistoryJson(), `telemetry_history-${stamp}.json`, 'application/json');
   };
 
   const handleReplay = async (text: string) => {

@@ -99,11 +99,12 @@ const buildConflictReduction = (snapshot: ISessionMetrics): PitchReport['conflic
 // the UI (live snapshot) or a Node context (snapshot loaded from a file).
 export const generatePitchReport = (
   snapshot: ISessionMetrics,
-  summary?: PitchSummary
+  summary?: PitchSummary,
+  scopeLabel: string = SCOPE
 ): PitchReport => {
   const report: PitchReport = {
     generatedAt: new Date().toISOString(),
-    scope: SCOPE,
+    scope: scopeLabel,
     disclaimer: DISCLAIMER,
     hasData: snapshot.interactionCount > 0,
     cohortId: snapshot.cohortId,
@@ -191,3 +192,81 @@ export const formatPitchReport = (report: PitchReport): string => {
   lines.push(`_${report.disclaimer}_`);
   return lines.join('\n');
 };
+
+// ── Cross-session aggregation ──────────────────────────────────────────────────
+//
+// Combines many persisted session snapshots (from TelemetrySessionStore) into a
+// single ISessionMetrics-shaped aggregate so the existing report/reduction logic
+// works unchanged. Every aggregate is a faithful roll-up of real counters:
+// - additive counters (tokens, interactions, conflicts) are summed;
+// - rates (latency, tone) are weighted by each session's interaction count;
+// - the conflict baseline/after windows are reconstructed from each session's
+//   stored rates (baseline window is always the fixed threshold size, so
+//   conflicts = rate x threshold is exact) and re-divided, giving a genuine
+//   pooled before/after rather than an average-of-rates.
+// Nothing is invented: a session that never reached its baseline contributes
+// nothing to the baseline windows, exactly as within a single session.
+export const aggregateSessions = (history: ISessionMetrics[]): ISessionMetrics => {
+  const empty: ISessionMetrics = {
+    totalTokensUsed: 0, averageLatencyMs: 0, activeMemoryCount: 0, archivedMemoryCount: 0,
+    interactionCount: 0, conflictCount: 0, conflictRate: 0, averageToneScore: 0,
+    averageTokensPerInteraction: 0, baselineInteractionThreshold: 10,
+    baselineConflictRate: null, postBaselineInteractionCount: 0, postBaselineConflictRate: null
+  };
+  if (history.length === 0) return empty;
+
+  let totalTokens = 0, interactions = 0, conflicts = 0;
+  let latencyWeighted = 0, toneWeighted = 0;
+  let baselineTurns = 0, baselineConflicts = 0, afterTurns = 0, afterConflicts = 0;
+  const threshold = history[0].baselineInteractionThreshold || 10;
+  const cohorts = new Set<string>();
+
+  for (const s of history) {
+    totalTokens += s.totalTokensUsed;
+    interactions += s.interactionCount;
+    conflicts += s.conflictCount;
+    latencyWeighted += s.averageLatencyMs * s.interactionCount;
+    toneWeighted += s.averageToneScore * s.interactionCount;
+    if (s.cohortId) cohorts.add(s.cohortId);
+
+    if (s.baselineConflictRate !== null) {
+      baselineTurns += threshold;
+      baselineConflicts += Math.round(s.baselineConflictRate * threshold);
+      if (s.postBaselineInteractionCount > 0 && s.postBaselineConflictRate !== null) {
+        afterTurns += s.postBaselineInteractionCount;
+        afterConflicts += Math.round(s.postBaselineConflictRate * s.postBaselineInteractionCount);
+      }
+    }
+  }
+
+  const last = history[history.length - 1];
+  return {
+    totalTokensUsed: totalTokens,
+    averageLatencyMs: interactions === 0 ? 0 : Math.round(latencyWeighted / interactions),
+    // Point-in-time distribution isn't additive; use the most recent session's.
+    activeMemoryCount: last.activeMemoryCount,
+    archivedMemoryCount: last.archivedMemoryCount,
+    interactionCount: interactions,
+    conflictCount: conflicts,
+    conflictRate: interactions === 0 ? 0 : conflicts / interactions,
+    averageToneScore: interactions === 0 ? 0 : toneWeighted / interactions,
+    averageTokensPerInteraction: interactions === 0 ? 0 : Math.round(totalTokens / interactions),
+    baselineInteractionThreshold: threshold,
+    baselineConflictRate: baselineTurns === 0 ? null : baselineConflicts / baselineTurns,
+    postBaselineInteractionCount: afterTurns,
+    postBaselineConflictRate: afterTurns === 0 ? null : afterConflicts / afterTurns,
+    cohortId: cohorts.size === 1 ? [...cohorts][0] : cohorts.size > 1 ? 'mixed' : undefined
+  };
+};
+
+// Convenience wrapper: aggregate persisted history and render a pooled report,
+// labelled with the real session count so it is never mistaken for one session.
+export const generateAggregatePitchReport = (
+  history: ISessionMetrics[],
+  summary?: PitchSummary
+): PitchReport =>
+  generatePitchReport(
+    aggregateSessions(history),
+    summary,
+    `${history.length} session(s) (aggregated observed telemetry)`
+  );
