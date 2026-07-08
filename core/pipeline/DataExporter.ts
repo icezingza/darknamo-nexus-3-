@@ -23,6 +23,17 @@ export interface JsonlExample {
   messages: JsonlMessage[];
 }
 
+// Real, observed counts describing the golden dataset produced alongside the
+// .jsonl. Every field is derived from the actual MemoryRepository contents at
+// export time -- nothing here is projected, extrapolated, or synthesized.
+export interface PitchSummary {
+  generatedAt: string;
+  minEmotionWeight: number;
+  totalRecords: number;
+  highValueMemoryCount: number;
+  goldenExampleCount: number;
+}
+
 interface ParsedEntry {
   role: 'user' | 'assistant';
   content: string;
@@ -60,6 +71,27 @@ export class DataExporter {
     const examples = this.buildExamples(records, minEmotionWeight);
     this.telemetryService.recordDataExport(examples.length);
     return examples.map(example => JSON.stringify(example)).join('\n');
+  }
+
+  // Metadata companion to the .jsonl. Recomputes the same golden pairs so the
+  // reported count always matches what exportToJsonl would emit at the same
+  // threshold, and counts high-value records straight from the repository.
+  buildPitchSummary(minEmotionWeight = HIGH_VALUE_EMOTION_WEIGHT): PitchSummary {
+    const records = this.memoryRepository.findHighValueMemories(-1);
+    const examples = this.buildExamples(records, minEmotionWeight);
+    return {
+      generatedAt: new Date().toISOString(),
+      minEmotionWeight,
+      totalRecords: records.length,
+      // A record is "high value" if it clears the same threshold used to keep
+      // a golden pair -- '>' matches buildExamples' comparison exactly.
+      highValueMemoryCount: records.filter(r => r.emotionWeight > minEmotionWeight).length,
+      goldenExampleCount: examples.length
+    };
+  }
+
+  buildPitchSummaryJson(minEmotionWeight = HIGH_VALUE_EMOTION_WEIGHT): string {
+    return JSON.stringify(this.buildPitchSummary(minEmotionWeight), null, 2);
   }
 
   private buildExamples(records: MemoryRecord[], minEmotionWeight: number): JsonlExample[] {

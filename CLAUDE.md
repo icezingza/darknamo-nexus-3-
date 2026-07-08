@@ -33,10 +33,20 @@ that kind.
   wrapper). `updateAffect` blends the prior state with the signal-implied
   target under a 0.7 inertia weight so a single turn can't swing the mood;
   `applyDecay` relaxes `arousal`/`passion` toward the `0.5` baseline each
-  turn while leaving `trust`/`valence`/`resonance` sticky. It is
-  intentionally **not** wired into `App.tsx` or persistence yet — this is
-  the standalone domain layer, so keep it free of storage/DOM/LLM access
-  when it is eventually integrated.
+  turn while leaving `trust`/`valence`/`resonance` sticky. Keep this layer
+  free of storage/DOM/LLM access — it must stay unit-testable in isolation.
+- Wiring: `App.tsx` holds `affectState` in React state (seeded from
+  `emotionEngine.createInitialAffect()`) and advances it **synchronously**
+  in `handleSendMessage`, right after this turn's `IEvaluationMetrics` is
+  derived — running `updateAffect` then `applyDecay` on that turn's
+  `toneScore`/`conflictLevel` via a functional `setAffectState(prev => …)`
+  updater. It is intentionally *not* placed in the Evolution engine's
+  deferred `.then()` block (section 5): the affect update depends only on
+  the already-computed metrics, so doing it synchronously keeps mood
+  updates in message order and prevents an `evaluateInteraction` rejection
+  from freezing the affect state. `components/EmotionDashboard.tsx` is a
+  pure presentation component that renders the vector as bars (guarding
+  against a missing vector); it never computes affect itself.
 - Keep affect *state* separate from prompt *vocabulary*. State is data
   (`{ valence: number, arousal: number, ... }`); how that state phrases a
   reply belongs in the prompt-construction layer, not hardcoded into named
@@ -47,10 +57,15 @@ that kind.
 - Live implementation:
   - Domain layer: `core/domain/MemoryRecord.ts` — `MemoryRecord` (fields:
     `id`, `content`, `state: 'ACTIVE' | 'ARCHIVED' | 'FORGOTTEN'`,
-    `emotionWeight`, `timestamp`, `lastAccessed`) with lifecycle methods
-    `archive()`, `forget()`, `recordAccess()`, plus the pure
-    `searchMemoryRecords` Jaccard-similarity ranking function. No
-    `window`/`localStorage` import here.
+    `emotionWeight`, `timestamp`, `lastAccessed`, optional
+    `embedding?: number[]`) with lifecycle methods `archive()`,
+    `forget()`, `recordAccess()`, plus two pure ranking functions:
+    `searchMemoryRecords` (lexical Jaccard) and `searchSemanticMemories`
+    (cosine similarity over `embedding`, via the pure
+    `calculateCosineSimilarity`, restricted to ACTIVE + embedded records).
+    The math stays here — **no** LLM/API call in the domain layer; the
+    embedding *vectors* are computed by the provider (section 9) and
+    passed in. No `window`/`localStorage` import here.
   - Infrastructure layer: `services/MemoryRepository.ts` —
     `MemoryRepository` interface implemented by
     `LocalStorageMemoryRepository`, persisting to `localStorage` with
@@ -67,6 +82,17 @@ that kind.
   records and are capped (default 3) so injected context stays bounded —
   this cap is the first line of defense against context overflow, on top
   of the `TokenBudget` gate in section 3.
+- Semantic retrieval: `App.tsx` embeds the user's query once per turn (via
+  `IModelProvider.generateEmbedding`, section 9) and calls
+  `MemoryRepository.buildSemanticContext(queryEmbedding, 3)`
+  (→ `searchSemanticActiveMemories` → domain `searchSemanticMemories`).
+  The same query vector is reused as the stored `embedding` of the saved
+  user memory; the model response is embedded before its own save.
+  Embedding is best-effort: `App.tsx`'s `safeEmbed` swallows failures and
+  returns `undefined`, so a failed embed falls back to recency
+  (`buildActiveContext`) for retrieval and saves the record with no
+  vector (searchable lexically, just not semantically). The Jaccard path
+  is retained, not removed.
 - `ARCHIVED` items are excluded from active search by default (reachable
   only via `searchArchivedMemories`); `FORGOTTEN` items are dropped from
   persistence entirely on the next `flush()`.
@@ -154,10 +180,40 @@ that kind.
 
 - Live implementation: `core/monitoring/TelemetryService.ts`
   (`TelemetryService`) — tracks `ISessionMetrics` (`totalTokensUsed`,
-  `averageLatencyMs`, `activeMemoryCount`, `archivedMemoryCount`) and
-  exposes `recordTokenUsage`, `recordLatency`, `recordMemoryDistribution`,
-  and `getSnapshot()`. No constructor dependencies — plain in-memory
-  counters, unit-testable in isolation.
+  `averageLatencyMs`, `activeMemoryCount`, `archivedMemoryCount`, plus the
+  observed aggregates `interactionCount`, `conflictCount`, `conflictRate`,
+  `averageToneScore`, `averageTokensPerInteraction`) and exposes
+  `recordTokenUsage`, `recordLatency`, `recordMemoryDistribution`,
+  `recordEvolutionMetrics`, and `getSnapshot()`. No constructor
+  dependencies — plain in-memory counters, unit-testable in isolation.
+- The tone/conflict aggregates are folded in by `recordEvolutionMetrics`
+  from the per-turn `toneScore`/`conflictLevel` the Evolution engine
+  already emits (guarded by `typeof === 'number'` so an unrelated payload
+  can't poison the running averages with `NaN`). Conflict is counted at
+  the same `>= 0.5` threshold the Evolution engine penalizes at, so the
+  observed rate lines up with live reward/penalty behavior. These are
+  *observed session counters* — there is no stored baseline, so nothing
+  here is a projected or baseline-relative "reduction."
+- The conflict-rate *reduction* is a genuinely measured within-session
+  before/after, not a projection: the first `BASELINE_INTERACTION_THRESHOLD`
+  (10) turns freeze a baseline conflict rate, and turns recorded *after*
+  that accrue to a **disjoint** "after" window. `getSnapshot()` exposes
+  `baselineConflictRate` (null until the threshold is reached) and
+  `postBaselineConflictRate` (null until ≥1 turn lands after it). The two
+  windows never overlap, so a reported reduction compares real measured
+  windows rather than a diluted cumulative-vs-cumulative figure.
+- `scripts/generatePitchReport.ts` is a pure formatter over a
+  `getSnapshot()` result (+ optional `DataExporter.buildPitchSummary()`):
+  it only copies/derives from real counters, labels the report
+  session-scoped, and reports zeros (never a synthesized figure) when no
+  interactions were recorded. Its `conflictReduction` returns a null
+  `reductionPct` with an explanatory `note` — never a fabricated stand-in
+  — whenever a real comparison is impossible (too few baseline turns, no
+  turns yet after the baseline, or a zero baseline with nothing to reduce
+  against), and reports a signed percentage honestly when conflict *rose*.
+  Do not add projected-improvement claims or a stored baseline that a
+  session didn't actually measure — session telemetry must not be dressed
+  up as aggregate validated production metrics.
 - Every `record*` call synchronously updates the in-memory counters, then
   defers the actual log line via `queueMicrotask` wrapped in try/catch
   (`emit`), so a future swap from `console.log` to a real network sink
@@ -237,22 +293,28 @@ that kind.
 - Live implementation: `core/providers/IModelProvider.ts` defines the
   interface every LLM backend must satisfy —
   `generateStream(payload: AssembledPromptPayload, onChunk): Promise<UsageMetrics>`,
-  plus `updateConfig`/`resetSession`. `AssembledPromptPayload` carries
+  `generateEmbedding(text): Promise<number[]>`, plus
+  `updateConfig`/`resetSession`. `AssembledPromptPayload` carries
   only the already-assembled per-turn `message`/`context`/`cache`
   options from the 4-layer pipeline — a provider must not re-derive or
-  reformat that content, just send it.
+  reformat that content, just send it. `generateEmbedding` is where all
+  vector computation lives — the domain layer (section 2) only does the
+  cosine math on vectors the provider returns.
 - `core/providers/GeminiProvider.ts` — the concrete Gemini implementation
   (formerly `services/geminiService.ts#DarkNaMoEngine`, moved and
   renamed, behavior unchanged). Captures `usageMetadata` from the last
   streamed chunk and returns it as `UsageMetrics` from `generateStream`.
-  `connectLive` (audio) stays a Gemini-specific extra method, not part of
-  `IModelProvider`, since not every provider will support it.
+  `generateEmbedding` calls `ai.models.embedContent` with
+  `text-embedding-004` and returns `embeddings[0].values` (empty array
+  for empty input). `connectLive` (audio) stays a Gemini-specific extra
+  method, not part of `IModelProvider`, since not every provider will
+  support it.
 - `core/providers/LocalFineTunedProvider.ts` — a stub for a future
   self-hosted OpenAI-compatible endpoint (LM Studio, Ollama, a checkpoint
-  fine-tuned on `DataExporter`'s output). `generateStream` throws until
-  it's actually implemented; do not silently return fake/empty output
-  instead of throwing, since that would hide the provider being
-  unusable.
+  fine-tuned on `DataExporter`'s output). `generateStream` and
+  `generateEmbedding` both throw until actually implemented; do not
+  silently return fake/empty output instead of throwing, since that would
+  hide the provider being unusable.
 - `core/providers/ModelRegistry.ts` — `createProvider(config, systemContext, modelType?)`
   resolves which `IModelProvider` to instantiate; `getActiveModelType()`/
   `setActiveModelType()` persist the choice to `localStorage` (guarded

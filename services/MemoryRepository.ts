@@ -1,4 +1,4 @@
-import { MemoryRecord, MemoryRecordProps, searchMemoryRecords } from '../core/domain/MemoryRecord';
+import { MemoryRecord, MemoryRecordProps, searchMemoryRecords, searchSemanticMemories } from '../core/domain/MemoryRecord';
 
 const STORAGE_KEY = 'namo_memory_records_v1';
 const MAX_STORED_RECORDS = 300;
@@ -11,6 +11,8 @@ export interface MemoryRepository {
   findActiveMemories(limit?: number): MemoryRecord[];
   searchActiveMemories(query: string, limit?: number): MemoryRecord[];
   searchArchivedMemories(query: string, limit?: number): MemoryRecord[];
+  searchSemanticActiveMemories(queryEmbedding: number[], limit?: number): MemoryRecord[];
+  buildSemanticContext(queryEmbedding: number[], limit?: number): string;
   archive(id: string): void;
   forget(id: string): void;
   adjustEmotionWeight(id: string, delta: number): void;
@@ -65,6 +67,11 @@ export class LocalStorageMemoryRepository implements MemoryRepository {
     return searchMemoryRecords(archived, query, limit).map(result => result.record);
   }
 
+  searchSemanticActiveMemories(queryEmbedding: number[], limit = MAX_ACTIVE_RESULTS): MemoryRecord[] {
+    // Domain function already restricts to ACTIVE + embedded records.
+    return searchSemanticMemories(this.records, queryEmbedding, limit).map(result => result.record);
+  }
+
   archive(id: string) {
     const record = this.records.find(existing => existing.id === id);
     if (!record) return;
@@ -106,6 +113,10 @@ export class LocalStorageMemoryRepository implements MemoryRepository {
 
   buildActiveContext(limit = MAX_ACTIVE_RESULTS): string {
     return this.formatContext('Active memory', this.findActiveMemories(limit));
+  }
+
+  buildSemanticContext(queryEmbedding: number[], limit = MAX_ACTIVE_RESULTS): string {
+    return this.formatContext('Relevant memory', this.searchSemanticActiveMemories(queryEmbedding, limit));
   }
 
   flush(force = false) {

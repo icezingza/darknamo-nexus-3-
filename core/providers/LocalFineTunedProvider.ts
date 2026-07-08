@@ -24,6 +24,12 @@ export class LocalFineTunedProvider implements IModelProvider {
     );
   }
 
+  async generateEmbedding(_text: string): Promise<number[]> {
+    throw new Error(
+      `LocalFineTunedProvider is a stub and not yet implemented. It should call an OpenAI-compatible embeddings endpoint at ${this.endpoint}.`
+    );
+  }
+
   updateConfig(_config: EngineConfig): void {
     // No-op until a real connection exists.
   }

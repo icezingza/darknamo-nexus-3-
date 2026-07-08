@@ -9,6 +9,7 @@ import { INITIAL_METRICS } from './core/Desire_Metric_System';
 import { getActiveSubliminal } from './core/Subliminal_Processor';
 import { MemoryRecord } from './core/domain/MemoryRecord';
 import { LocalStorageMemoryRepository } from './services/MemoryRepository';
+import { QdrantMemoryRepository } from './services/QdrantMemoryRepository';
 import { NAMO_IDENTITY } from './core/identity/NamoIdentity';
 import { buildMoralContext, evaluateMoralSignals } from './core/Unified_Moral_Layer';
 import { TokenBudget } from './core/Token_Budget';
@@ -17,6 +18,8 @@ import { TelemetryService } from './core/monitoring/TelemetryService';
 import { ABTestManager } from './core/testing/ABTestManager';
 import { DataExporter } from './core/pipeline/DataExporter';
 import { CognitiveStreamParser } from './core/cognition/StreamParser';
+import { EmotionEngine, IAffectVector } from './core/emotion/EmotionEngine';
+import { EmotionDashboard } from './components/EmotionDashboard';
 import { ElevenLabsService } from './services/ElevenLabsService';
 
 const VoiceWaveform: React.FC<{ isActive: boolean; isProcessing: boolean }> = ({ isActive, isProcessing }) => {
@@ -69,8 +72,11 @@ const App: React.FC = () => {
     topP: 0.95
   });
 
-  const memoryStore = useMemo(() => new LocalStorageMemoryRepository(), []);
+  const localMemoryStore = useMemo(() => new LocalStorageMemoryRepository(), []);
+  const memoryStore = useMemo(() => new QdrantMemoryRepository(localMemoryStore), [localMemoryStore]);
   const evolutionEngine = useMemo(() => new EvolutionEngine(memoryStore), [memoryStore]);
+  const emotionEngine = useMemo(() => new EmotionEngine(), []);
+  const [affectState, setAffectState] = useState<IAffectVector>(() => emotionEngine.createInitialAffect());
   const abTestManager = useMemo(() => new ABTestManager(), []);
   const cohort = useMemo(() => abTestManager.getCohort(), [abTestManager]);
   const telemetryService = useMemo(() => new TelemetryService(cohort), [cohort]);
@@ -175,10 +181,38 @@ const App: React.FC = () => {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
 
-    const [moralContext, memoryContext] = await Promise.all([
-      Promise.resolve(buildMoralContext(textToSend)),
-      Promise.resolve(memoryEnabled ? memoryStore.buildActiveContext(3) : '')
-    ]);
+    // Embedding calls hit the provider and can fail; never let that break the
+    // turn. Returns undefined on error/empty so callers fall back cleanly.
+    const safeEmbed = async (text: string): Promise<number[] | undefined> => {
+      if (!engine) return undefined;
+      try {
+        const vector = await engine.generateEmbedding(text);
+        return vector.length > 0 ? vector : undefined;
+      } catch (err) {
+        console.error('Embedding generation failed:', err);
+        return undefined;
+      }
+    };
+
+    // Reused for both semantic retrieval and the user memory's stored vector.
+    const queryEmbedding = memoryEnabled ? await safeEmbed(textToSend) : undefined;
+    const moralContext = buildMoralContext(textToSend);
+
+    // Prefer cloud-backed Qdrant ANN search when available; fall back to
+    // in-process cosine, then recency — always in the same async turn.
+    let memoryContext = '';
+    if (memoryEnabled) {
+      if (queryEmbedding && memoryStore.isQdrantAvailable) {
+        const qdrantHits = await memoryStore.searchQdrantSemantic(queryEmbedding, 3);
+        memoryContext = qdrantHits.length > 0
+          ? `Relevant memory:\n${qdrantHits.map(r => `- ${r.content.slice(0, 220)}`).join('\n')}`
+          : memoryStore.buildActiveContext(3);
+      } else if (queryEmbedding) {
+        memoryContext = memoryStore.buildSemanticContext(queryEmbedding, 3);
+      } else {
+        memoryContext = memoryStore.buildActiveContext(3);
+      }
+    }
 
     const distilledIdentity = NAMO_IDENTITY.getDistilledContext(moralContext, cohort);
     const contextBlock = [distilledIdentity, memoryContext].filter(Boolean).join('\n\n');
@@ -218,7 +252,8 @@ const App: React.FC = () => {
         id: userMessage.id,
         content: `(user) ${textToSend}`,
         emotionWeight: 0.5,
-        timestamp: userMessage.timestamp.getTime()
+        timestamp: userMessage.timestamp.getTime(),
+        embedding: queryEmbedding
       }));
     }
 
@@ -264,18 +299,34 @@ const App: React.FC = () => {
     }
 
     if (memoryEnabled && fullResponse) {
+      const responseEmbedding = await safeEmbed(fullResponse);
       memoryStore.save(new MemoryRecord({
         id: modelMessageId,
         content: `(model) ${fullResponse}`,
         emotionWeight: 0.5,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        embedding: responseEmbedding
       }));
       if (autoSaveEnabled) {
         memoryStore.flush();
       }
 
-      // Fire-and-forget: the evolution loop must not block the UI response thread.
       const evaluationMetrics = deriveEvaluationMetrics(evaluateMoralSignals(textToSend), cohort);
+
+      // Advance the affect vector synchronously (lightweight in-memory op):
+      // it depends only on this turn's metrics, not on the evolution promise
+      // resolving. Doing it here — rather than inside the .then() below —
+      // keeps mood updates in message order and prevents an evaluateInteraction
+      // rejection from freezing the affect state for the rest of the session.
+      // The functional updater folds onto the latest committed vector.
+      setAffectState(prev => emotionEngine.applyDecay(
+        emotionEngine.updateAffect(prev, {
+          toneScore: evaluationMetrics.toneScore,
+          conflictLevel: evaluationMetrics.conflictLevel
+        })
+      ));
+
+      // Fire-and-forget: the evolution loop must not block the UI response thread.
       evolutionEngine.evaluateInteraction(
         [userMessage.id, modelMessageId],
         evaluationMetrics
@@ -317,23 +368,32 @@ const App: React.FC = () => {
     messages,
     memoryStore,
     evolutionEngine,
+    emotionEngine,
     telemetryService,
     cohort
   ]);
 
-  const handleExportTrainingData = () => {
-    const jsonl = dataExporter.exportToJsonl();
-    const blob = new Blob([jsonl], { type: 'application/jsonl' });
+  const downloadBlob = (contents: string, filename: string, mime: string) => {
+    const blob = new Blob([contents], { type: mime });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `namo-training-data-${Date.now()}.jsonl`;
+    link.download = filename;
     document.body.appendChild(link);
     link.click();
     setTimeout(() => {
       URL.revokeObjectURL(url);
       link.remove();
     }, 100);
+  };
+
+  const handleExportTrainingData = () => {
+    const stamp = Date.now();
+    const jsonl = dataExporter.exportToJsonl();
+    downloadBlob(jsonl, `namo-training-data-${stamp}.jsonl`, 'application/jsonl');
+    // Metadata companion: real high-value/golden counts for the same export.
+    const summaryJson = dataExporter.buildPitchSummaryJson();
+    downloadBlob(summaryJson, `pitch_summary-${stamp}.json`, 'application/json');
   };
 
   const handleReplay = async (text: string) => {
@@ -416,6 +476,8 @@ const App: React.FC = () => {
               </div>
             </div>
           </section>
+
+          <EmotionDashboard affectState={affectState} />
 
           <section>
             <h3 className="text-[10px] font-bold text-zinc-700 uppercase mb-4 mono tracking-widest border-b border-zinc-900 pb-1">Guidance_Commands</h3>
